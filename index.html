@@ -1,1 +1,981 @@
-Hello World
+<div>Migrate from Cassandra in a vanilla STS to K8ssandra</div>
+<div>------------------------------<wbr />----------------------</div>
+<div>Most users of k8ssandra have either started a new Cassandra cluster or have migrated from an existing Cassandra cluster.</div>
+<p>&nbsp;</p>
+<div>In containerized Cassandra clusters like the vanilla STS Cassandra cluster, there is no backups made perhaps (besides disc snapsots) or rather Admins are stuck in a assumption that the migration to k8ssandra is straight forward and flawless.</div>
+<p>&nbsp;</p>
+<div>The Risk is what if the migration to k8ssandra is not a success ? And therefore what is the fallback / migrating plan from a STS cluster point of view. It involves risk of losing data. Can we have a backup/restore test on the vanilla STS cluster before we proceed with migration to k8ssandra cluster ?</div>
+<p>&nbsp;</p>
+<div>There is no documented procedure on the internet for backup and restore of vanilla STS cluster and an attempt was made with this solution and it kind of works. Repo: <a href="https://github.com/alokhom/cassandra-statefulset-to-k8ssandra-migration" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://github.com/alokhom/cassandra-statefulset-to-k8ssandra-migration&amp;source=gmail&amp;ust=1659075984569000&amp;usg=AOvVaw3FrJdOHZRpCqpoHfmjNFIX">https://github.com/alokhom/<wbr />cassandra-statefulset-to-<wbr />k8ssandra-migration</a></div>
+<p>&nbsp;</p>
+<div>To simulate the scenario let us make a STS cluster on gke</div>
+<div>------------------------------<wbr />---------------------------</div>
+<div>- We have a 3 pod vanilla STS cluster with 10 GB disc each. K8Demo is the cluster name.</div>
+<div>- We assume some clients old and new are using typical CASSANDRA varaibles to connect to the cluster.</div>
+<div>- On gke, make a namespace cassandra and apply the vanilla cassandra sts manifest.</div>
+<div>- Ensure all the manifests are in the same namespace of the STS.</div>
+<div>```</div>
+<div>apiVersion: apps/v1</div>
+<div>kind: StatefulSet</div>
+<div>metadata:</div>
+<div>&nbsp; name: cassandra</div>
+<div>&nbsp; namespace: &lt;namespace of the sts e.g. cassandra&gt;</div>
+<div>&nbsp; labels:</div>
+<div>&nbsp; &nbsp; app: cassandra</div>
+<div>spec:</div>
+<div>&nbsp; serviceName: cassandra</div>
+<div>&nbsp; replicas: 3</div>
+<div>&nbsp; selector:</div>
+<div>&nbsp; &nbsp; matchLabels:</div>
+<div>&nbsp; &nbsp; &nbsp; app: cassandra</div>
+<div>&nbsp; template:</div>
+<div>&nbsp; &nbsp; metadata:</div>
+<div>&nbsp; &nbsp; &nbsp; labels:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; app: cassandra</div>
+<div>&nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; terminationGracePeriodSeconds: 1800</div>
+<div>&nbsp; &nbsp; &nbsp; containers:</div>
+<div>&nbsp; &nbsp; &nbsp; - name: cassandra</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; image: <a href="http://gcr.io/google-samples/cassandra:v13" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://gcr.io/google-samples/cassandra:v13&amp;source=gmail&amp;ust=1659075984569000&amp;usg=AOvVaw1g0T2km2foTA7qD1aEFjN9">gcr.io/google-samples/<wbr />cassandra:v13</a></div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; imagePullPolicy: Always</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; ports:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; - containerPort: 7000</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: intra-node</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; - containerPort: 7001</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: tls-intra-node</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; - containerPort: 7199</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: jmx</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; - containerPort: 9042</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: cql</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; resources:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; limits:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cpu: "500m"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; memory: 1Gi</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; requests:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cpu: "500m"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; memory: 1Gi</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; securityContext:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; capabilities:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; add:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - IPC_LOCK</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; lifecycle:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; preStop:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; exec:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; command:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - /bin/sh</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - -c</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - nodetool drain</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; env:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: MAX_HEAP_SIZE</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: 512M</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: HEAP_NEWSIZE</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: 100M</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: CASSANDRA_SEEDS</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: "cassandra-0.cassandra.<wbr />default.svc.cluster.local"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: CASSANDRA_CLUSTER_NAME</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: "K8Demo"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: CASSANDRA_DC</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: "DC1-K8Demo"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: CASSANDRA_RACK</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: "Rack1-K8Demo"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: POD_IP</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; valueFrom:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fieldRef:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fieldPath: status.podIP</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; readinessProbe:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; exec:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; command:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - /bin/bash</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - -c</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - /ready-probe.sh</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; initialDelaySeconds: 15</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; timeoutSeconds: 5</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; # These volume mounts are persistent. They are like inline claims,</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; # but not exactly because the names need to match exactly one of</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; # the stateful pod volumes.</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; - name: cassandra-data</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /cassandra_data</div>
+<div>&nbsp; volumeClaimTemplates:</div>
+<div>&nbsp; - metadata:</div>
+<div>&nbsp; &nbsp; &nbsp; name: cassandra-data</div>
+<div>&nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; accessModes: [ "ReadWriteOnce" ]</div>
+<div>&nbsp; &nbsp; &nbsp; storageClassName: standard-rwo</div>
+<div>&nbsp; &nbsp; &nbsp; resources:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; requests:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; storage: 10Gi</div>
+<div>---</div>
+<div>apiVersion: v1</div>
+<div>kind: Service</div>
+<div>metadata:</div>
+<div>&nbsp; labels:</div>
+<div>&nbsp; &nbsp; app: cassandra</div>
+<div>&nbsp; name: cassandra</div>
+<div>&nbsp; namespace: &lt;namespace of the sts file&gt;</div>
+<div>spec:</div>
+<div>&nbsp; ports:</div>
+<div>&nbsp; - port: 9042</div>
+<div>&nbsp; selector:</div>
+<div>&nbsp; &nbsp; app: cassandra</div>
+<div>```</div>
+<div>- In the above yaml there is no medusa support, a popular cassandra backup solution. &nbsp;</div>
+<div>- PV snapshots in google cloud are possible and has their own risks involved.</div>
+<p>&nbsp;</p>
+<div>Using medusa backup on the vanilla sts cassandra cluster with zero downtime</div>
+<div>------------------------------<wbr />------------------------------<wbr />---------------</div>
+<div>- Read more about Medusa here. <a href="https://github.com/thelastpickle/cassandra-medusa" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://github.com/thelastpickle/cassandra-medusa&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw0DSqHr2nRIF9KrhGoKxmuU">https://github.com/<wbr />thelastpickle/cassandra-medusa</a><wbr />. Medusa is also used in k8ssandra operator.Medusa is also offered as a Docker image.</div>
+<div>- You will need a s3 storage bucket to backup and restore the vanilla cassandra STS cluster. For this demo we have selected the gcs setup from <a href="https://github.com/thelastpickle/cassandra-medusa/tree/master/docs" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://github.com/thelastpickle/cassandra-medusa/tree/master/docs&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw23ZQEFrY3rbSRwQOkaMlQj">https://github.com/<wbr />thelastpickle/cassandra-<wbr />medusa/tree/master/docs</a>. You could select your own s3 preference. Refer to the medusa.ini inside the ConfigMap referred below to find the storage stub. Ensure the file name is medusa_gcp_key.json and use the bucket name that was created.</div>
+<div>```</div>
+<div>[storage]</div>
+<div>storage_provider = google_storage</div>
+<div>bucket_name = gcs_bucket_name or replace with the correct s3 bucket name.</div>
+<div>key_file = /etc/medusa/medusa_gcp_key.<wbr />json</div>
+<div>```</div>
+<div>Create and apply secret</div>
+<div>-----------------------</div>
+<div>```</div>
+<div>kubectl create secret generic google-storage-s3-json -n &lt;namespace-of-sts-cassandra&gt; --from-file=medusa_gcp_key.<wbr />json=/tmp/medusa_gcp_key.json</div>
+<div>```</div>
+<div>Modifying the vanilla cassandra STS yaml file</div>
+<div>------------------------------<wbr />---------------</div>
+<div>&lt;b&gt;Note&lt;/b&gt;: Submit all the changes of the sts in one go.</div>
+<div>- The idea is to trigger a backup/backups using Medusa via a CronJob.</div>
+<div>- Edit the STS yaml file.</div>
+<div>- We will use the jolokia jvm agent for backing up here via the initContainer and volumeMount on the cassandra sts container. Management API is not used here. Reference: <a href="https://github.com/thelastpickle/cassandra-medusa/tree/master/k8s" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://github.com/thelastpickle/cassandra-medusa/tree/master/k8s&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw3dOapNwniaLwl858fP0e8D">https://github.com/<wbr />thelastpickle/cassandra-<wbr />medusa/tree/master/k8s</a></div>
+<div>- The jolokia-share volume helps provide the jolokia jar from the initContainer to the medusa container.</div>
+<div>- Add the jolokia initContainer code block to the cassandra sts yaml</div>
+<div>```</div>
+<div>&nbsp;initContainers:</div>
+<div>&nbsp; &nbsp;- name: install-jolokia-jvm-agent</div>
+<div>&nbsp; &nbsp; &nbsp;image: busybox</div>
+<div>&nbsp; &nbsp; &nbsp;command:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- sh</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- '-c'</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- &gt;-</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;wget -O /usr/share/java/jolokia-jvm-1.<wbr />6.2-agent.jar</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;<a href="http://search.maven.org/remotecontent?filepath=org/jolokia/jolokia-jvm/1.6.2/jolokia-jvm-1.6.2-agent.jar" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://search.maven.org/remotecontent?filepath%3Dorg/jolokia/jolokia-jvm/1.6.2/jolokia-jvm-1.6.2-agent.jar&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1_M1AqU71hkN9F-CtxtLOW">http://search.maven.org/<wbr />remotecontent?filepath=org/<wbr />jolokia/jolokia-jvm/1.6.2/<wbr />jolokia-jvm-1.6.2-agent.jar</a></div>
+<div>&nbsp; &nbsp; &nbsp;resources: {}</div>
+<div>&nbsp; &nbsp; &nbsp;volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- name: jolokia-share</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;mountPath: /usr/share/java</div>
+<div>```</div>
+<div>- Add extra volumes on the cassandra sts yaml.</div>
+<div>```</div>
+<div>&nbsp;volumes:</div>
+<div>&nbsp; &nbsp;- name: jolokia-share</div>
+<div>&nbsp; &nbsp; &nbsp;emptyDir: {}</div>
+<div>&nbsp; &nbsp;- name: server-config</div>
+<div>&nbsp; &nbsp; &nbsp;emptyDir: {}</div>
+<div>&nbsp; &nbsp;- name: cassandra-medusa</div>
+<div>&nbsp; &nbsp; &nbsp;configMap:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;name: scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;items:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- key: medusa.ini</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;path: medusa.ini</div>
+<div>&nbsp; &nbsp;- name: google-storage-s3-json</div>
+<div>&nbsp; &nbsp; &nbsp;secret:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;secretName: google-storage-s3-json</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;defaultMode: 420</div>
+<div>&nbsp; &nbsp;- name: medusa-scripts</div>
+<div>&nbsp; &nbsp; &nbsp;configMap:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;defaultMode: 0755</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;name: scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;items:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- key: get_cassandra_node_names.sh</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;path: get_cassandra_node_names.sh</div>
+<div>```</div>
+<div>- Modify/add volumeMounts on the cassandra container.</div>
+<div>```</div>
+<div>&nbsp; &nbsp; &nbsp;volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- name: medusa-scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;mountPath: /scripts/medusa-scripts/</div>
+<div>```</div>
+<div>- Modify/add the environment variables to the sts cassandra container. Ensure the value for variable CASSANDRA_DC(if not there).</div>
+<div>```</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- name: CASSANDRA_DC</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value: K8Demo</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- name: CASSANDRA_ENDPOINT_SNITCH</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value: GossipingPropertyFileSnitch</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- name: JVM_EXTRA_OPTS</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value: -javaagent:/usr/share/java/<wbr />jolokia-jvm-1.6.2-agent.jar=<wbr />port=8778,host=localhost</div>
+<div>```</div>
+<div>- Add the medusa container block to the sts manifest</div>
+<div>```</div>
+<div>&nbsp; &nbsp;- name: medusa</div>
+<div>&nbsp; &nbsp; &nbsp;image: <a href="http://docker.io/k8ssandra/medusa:0.12.2" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://docker.io/k8ssandra/medusa:0.12.2&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw0PUH1XNvGUaC499hpstYoH">docker.io/k8ssandra/medusa:0.<wbr />12.2</a></div>
+<div>&nbsp; &nbsp; &nbsp;ports:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- containerPort: 50051</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;protocol: TCP</div>
+<div>&nbsp; &nbsp; &nbsp;env:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- name: MEDUSA_MODE</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value: GRPC</div>
+<div>&nbsp; &nbsp; &nbsp;resources: {}</div>
+<div>&nbsp; &nbsp; &nbsp;volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- name: server-config</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;mountPath: /etc/cassandra</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- name: cassandra-medusa</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;mountPath: /etc/medusa</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- name: cassandra-data</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;mountPath: /var/lib/cassandra</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;- name: google-storage-s3-json</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;mountPath: /etc/medusa-secrets</div>
+<div>&nbsp; &nbsp; &nbsp;livenessProbe:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;exec:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;command:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- /bin/grpc_health_probe</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- '-addr=:50051'</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;initialDelaySeconds: 10</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;timeoutSeconds: 1</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;periodSeconds: 10</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;successThreshold: 1</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;failureThreshold: 3</div>
+<div>&nbsp; &nbsp; &nbsp;readinessProbe:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;exec:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;command:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- /bin/grpc_health_probe</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;- '-addr=:50051'</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;initialDelaySeconds: 5</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;timeoutSeconds: 1</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;periodSeconds: 10</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;successThreshold: 1</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp;failureThreshold: 3</div>
+<div>&nbsp; &nbsp; &nbsp;terminationMessagePath: /dev/termination-log</div>
+<div>&nbsp; &nbsp; &nbsp;terminationMessagePolicy: File</div>
+<div>&nbsp; &nbsp; &nbsp;imagePullPolicy: IfNotPresent</div>
+<div>&nbsp; &nbsp; &nbsp;securityContext: {}</div>
+<div>```</div>
+<div>Create and apply the below configMap</div>
+<div>------------------------------<wbr />------</div>
+<div>`cassandra-backup.ConfigMap.<wbr />yaml` to the same namespace as cassandra STS yaml, if not default namespace.It offers</div>
+<div>- kubectl cli (configure_k8s.sh)</div>
+<div>- Discovering cassandra nodes names (ascertain_cassandra_nodes.sh and get_cassandra_node_names.sh)</div>
+<div>- Copying the cassandra.yml file from the cassandra-0 node to the medusa container of all nodes.</div>
+<div>- Firing backup from a python file. (backup_with_medusa.sh and insert.py)</div>
+<div>- The Cassandra Administrator is requested to add the right jmx password as follows in the file jmxremote.password</div>
+<div>```</div>
+<div>&nbsp; jmx_user jmx123</div>
+<div>```</div>
+<div>- The Cassandra Administrator is requested to add the right jmx user as follows in the file jmxremote.access.</div>
+<div>```</div>
+<div>&nbsp; jmx_user readwrite</div>
+<div>```</div>
+<div>Ensure the correct nodetool username as jmx_user and configure it in the medusa.ini</div>
+<div>```</div>
+<div>&nbsp; nodetool_username = jmx_user</div>
+<div>```</div>
+<div>- Medusa needs a medusa ini file configuration to be used for backup. (medusa.ini). This ini file also has the storage configuration of s3 and credentials of nodetool password. The grpc should be enabled (enabled = 1). Kubernetes should be enabled and cassandra_url should point to <a href="http://127.0.0.1:8778/jolokia/" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://127.0.0.1:8778/jolokia/&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw26IAcGVtvOKNtfEA0pcgrf">http://127.0.0.1:8778/jolokia/</a> . Management API is turned off. (use_mgmt_api = 0) &lt;b&gt;Note&lt;/b&gt;: Make changes to the medusa.ini block whereever it requires, e.g. file and path of nodetool_password_file_path.</div>
+<div>&lt;b&gt;Note&lt;/b&gt;: Ensure the `-n cassandra` is updated in the configMap to a valid namespace. i.e. &lt;namespace of the sts e.g. cassandra&gt;</div>
+<div>```</div>
+<div>kind: ConfigMap</div>
+<div>apiVersion: v1</div>
+<div>metadata:</div>
+<div>&nbsp; name: scripts</div>
+<div>&nbsp; namespace: &lt;namespace-of-sts-cassandra&gt;</div>
+<div>data:</div>
+<div>&nbsp; configure_k8s.sh: |</div>
+<div>&nbsp; &nbsp; #!/bin/sh</div>
+<div>&nbsp; &nbsp; curl -sLO "<a href="https://dl.k8s.io/release/$(curl" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://dl.k8s.io/release/$(curl&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1JOwUccEcN3OSp6CzoX8Ls">https://dl.k8s.io/release/$(<wbr />curl</a> -L -s <a href="https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1jtuvvnrN7diEFmHeX8SvK">https://dl.k8s.io/release/<wbr />stable.txt)/bin/linux/amd64/<wbr />kubectl</a>" &amp;&amp; chmod +x kubectl &amp;&amp; mv ./kubectl /usr/bin/kubectl</div>
+<div>&nbsp; &nbsp; echo "kubectl installed"</div>
+<p>&nbsp;</p>
+<div>&nbsp; cassandra_backup.yaml: |</div>
+<div>&nbsp; &nbsp; apiVersion: <a href="http://cassandra.k8ssandra.io/v1alpha1" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://cassandra.k8ssandra.io/v1alpha1&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1xkzBtg9Jr8sqoCfy69DCk">cassandra.k8ssandra.io/<wbr />v1alpha1</a></div>
+<div>&nbsp; &nbsp; kind: CassandraBackup</div>
+<div>&nbsp; &nbsp; metadata:</div>
+<div>&nbsp; &nbsp; &nbsp; name: medusa-daily-timestamp</div>
+<div>&nbsp; &nbsp; &nbsp; namespace: &lt;namespace of the sts e.g. cassandra&gt;</div>
+<div>&nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; backupType: "differential"</div>
+<div>&nbsp; &nbsp; &nbsp; name: medusa-daily-timestamp</div>
+<div>&nbsp; &nbsp; &nbsp; cassandraDatacenter: k8s-1</div>
+<p>&nbsp;</p>
+<div>&nbsp; get_cassandra_node_names.sh: |</div>
+<div>&nbsp; &nbsp; #!/bin/sh</div>
+<div>&nbsp; &nbsp; apt-get update &gt; /dev/null</div>
+<div>&nbsp; &nbsp; apt-get install sudo -y &gt; /dev/null</div>
+<div>&nbsp; &nbsp; apt-get install dnsutils -qq &gt;/tmp/dns.out;</div>
+<div>&nbsp; &nbsp; if [ -f /tmp/cassandrahostlist ];then rm /tmp/cassandrahostlist; fi</div>
+<div>&nbsp; &nbsp; cat /tmp/cassandraIPlist | while read line;do dig -x $line +short | awk -F"." '{print $1}' &gt;&gt; /tmp/cassandrahostlist;done</div>
+<div>&nbsp; &nbsp; sleep 1;</div>
+<p>&nbsp;</p>
+<div>&nbsp; ascertain_cassandra_nodes.sh: |</div>
+<div>&nbsp; &nbsp; #!/bin/sh</div>
+<div>&nbsp; &nbsp; # change namesapce to default if it is needed. Check which namespace the cassandra sts pods are running in the source cluster.</div>
+<div>&nbsp; &nbsp; kubectl exec -it cassandra-0 -n cassandra -c cassandra -- bash -c "[[ -f /secrets/jmxremote.password ]] &amp;&amp; nodetool -h ::FFFF:127.0.0.1 -u jmx_user -pwf /secrets/jmxremote.password status | grep UN | cut -d ' ' -f3 &gt; /tmp/cassandraIPlist";sleep 1;</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; kubectl exec -it cassandra-0 -n cassandra -c cassandra -- bash -c "./scripts/medusa-scripts/get_<wbr />cassandra_node_names.sh";sleep 1;</div>
+<div>&nbsp; &nbsp; kubectl exec -it cassandra-0 -n cassandra -c cassandra -- bash -c "cat /tmp/cassandrahostlist" | tee /tmp/hostlist;</div>
+<div>&nbsp; &nbsp; echo "nodes acertained";sleep 5;</div>
+<p>&nbsp;</p>
+<div>&nbsp; copy_yaml.sh: |</div>
+<div>&nbsp; &nbsp; #!/bin/sh</div>
+<div>&nbsp; &nbsp; # the idea was to copy the cassandra yaml from cassandra node to medusa container in cassandra nodes. &nbsp;for example a 3 node cassandra.</div>
+<div>&nbsp; &nbsp; # change namesapce to default if it is needed. the cassandra node should be available &nbsp;in the namespace.</div>
+<div>&nbsp; &nbsp; for node in $(cat /tmp/hostlist)</div>
+<div>&nbsp; &nbsp; do</div>
+<div>&nbsp; &nbsp; &nbsp; nodename="$(echo $node| sed 's/\r$//')"</div>
+<div>&nbsp; &nbsp; &nbsp; sleep 2</div>
+<div>&nbsp; &nbsp; &nbsp; kubectl exec pod/$nodename -n cassandra -c cassandra -- tar cf - /etc/cassandra/cassandra.yaml | kubectl exec -i pod/$nodename -n cassandra -c medusa -- bash -c 'tar xvf - -C /tmp &amp;&amp; if [ -f /etc/cassandra/cassandra.yaml &nbsp;];then rm -f /etc/cassandra/cassandra.yaml; fi; cp /tmp/etc/cassandra/cassandra.<wbr />yaml /etc/cassandra &amp;&amp; ls /etc/cassandra &amp;&amp; sleep 2';sleep 5;</div>
+<div>&nbsp; &nbsp; done</div>
+<p><br /><br /></p>
+<div>&nbsp; backup_with_medusa.sh: |</div>
+<div>&nbsp; &nbsp; #!/bin/sh</div>
+<div>&nbsp; &nbsp; cp insert.py client_candidate.py</div>
+<div>&nbsp; &nbsp; sleep 1</div>
+<div>&nbsp; &nbsp; dateTime=backup-"$(date +"%m-%d-%Y-%H-%M-%S")"</div>
+<div>&nbsp; &nbsp; for node in $(cat /tmp/hostlist)</div>
+<div>&nbsp; &nbsp; do</div>
+<div>&nbsp; &nbsp; &nbsp; nodename="$(echo $node| sed 's/\r$//').cassandra"</div>
+<div>&nbsp; &nbsp; &nbsp; sleep 5</div>
+<div>&nbsp; &nbsp; &nbsp; echo "............ starting backup of $nodename ...."</div>
+<div>&nbsp; &nbsp; &nbsp; sleep 5</div>
+<div>&nbsp; &nbsp; &nbsp; cat client_candidate.py | sed -e s/localhost/"$nodename"/g &nbsp;&gt; client.py</div>
+<div>&nbsp; &nbsp; &nbsp; sleep 5</div>
+<div>&nbsp; &nbsp; &nbsp; python ./client.py "$dateTime"</div>
+<div>&nbsp; &nbsp; &nbsp; sleep 5</div>
+<div>&nbsp; &nbsp; &nbsp; echo "............ backup of $nodename complete...."</div>
+<div>&nbsp; &nbsp; &nbsp; sleep 5</div>
+<div>&nbsp; &nbsp; done</div>
+<div>&nbsp; &nbsp; sleep 20;</div>
+<p>&nbsp;</p>
+<div>&nbsp; insert.py: |</div>
+<div>&nbsp; &nbsp; import time</div>
+<div>&nbsp; &nbsp; from datetime import datetime</div>
+<div>&nbsp; &nbsp; import medusa_pb2</div>
+<div>&nbsp; &nbsp; import medusa_pb2_grpc</div>
+<div>&nbsp; &nbsp; backupName = sys.argv[1]</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; import grpc</div>
+<div>&nbsp; &nbsp; import logging</div>
+<div>&nbsp; &nbsp; from grpc_health.v1 import health_pb2</div>
+<div>&nbsp; &nbsp; from grpc_health.v1 import health_pb2_grpc</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; from medusa.service.grpc import medusa_pb2</div>
+<div>&nbsp; &nbsp; from medusa.service.grpc import medusa_pb2_grpc</div>
+<p><br /><br /></p>
+<div>&nbsp; &nbsp; class Client:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def __init__(self, target, channel_options=[]):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; self.channel = grpc.insecure_channel(target, options=channel_options)</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def health_check(self):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; health_stub = health_pb2_grpc.HealthStub(<wbr />self.channel)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; request = health_pb2.HealthCheckRequest(<wbr />)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return health_stub.Check(request)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed health check due to error: {}".format(e))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return None</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def create_backup_stub(self, mode):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; stub = medusa_pb2_grpc.MedusaStub(<wbr />self.channel)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if mode == "differential":</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; backup_mode = 0</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; elif mode == "full":</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; backup_mode = 1</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; else:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; raise RuntimeError("{} is not a recognized backup mode".format(mode))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return backup_mode, stub</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def async_backup(self, name, mode):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; backup_mode, stub = self.create_backup_stub(mode=<wbr />mode)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; request = medusa_pb2.BackupRequest(name=<wbr />name, mode=backup_mode)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return stub.AsyncBackup(request)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed async backup for name: {} and mode: {} due to error: {}".format(name, mode, e))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return None</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def backup(self, name, mode):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; backup_mode, stub = self.create_backup_stub(mode=<wbr />mode)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; request = medusa_pb2.BackupRequest(name=<wbr />name, mode=backup_mode)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return stub.Backup(request)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed sync backup for name: {} and mode: {} due to error: {}".format(name, mode, e))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return None</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def delete_backup(self, name):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; stub = medusa_pb2_grpc.MedusaStub(<wbr />self.channel)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; request = medusa_pb2.<wbr />DeleteBackupRequest(name=name)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; stub.DeleteBackup(request)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed to delete backup for name: {} due to error: {}".format(name, e))</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def get_backups(self):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; stub = medusa_pb2_grpc.MedusaStub(<wbr />self.channel)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; request = medusa_pb2.GetBackupsRequest()</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; response = stub.GetBackups(request)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return response.backups</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed to obtain list of backups due to error: {}".format(e))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return None</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def get_backup_status(self, name):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; stub = medusa_pb2_grpc.MedusaStub(<wbr />self.channel)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; request = medusa_pb2.<wbr />BackupStatusRequest(<wbr />backupName=name)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; resp = stub.BackupStatus(request)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return resp.status</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed to determine backup status for name: {} due to error: {}".format(name, e))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return medusa_pb2.StatusType.UNKNOWN</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def backup_exists(self, name):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; backups = self.get_backups()</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; for backup in list(backups):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; if backup.backupName == name:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return True</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return False</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed to determine if backup exists for backup name: {} due to error: {}".format(name, e))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return False</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; def purge_backups(self):</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; try:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; stub = medusa_pb2_grpc.MedusaStub(<wbr />self.channel)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; request = medusa_pb2.<wbr />PurgeBackupsRequest()</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; resp = stub.PurgeBackups(request)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return resp</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; except grpc.RpcError as e:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; logging.error("Failed to purge backups due to error: {}".format(e))</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return None</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; if __name__ == '__main__':</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; logging.basicConfig()</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; client_stub = Client('localhost:50051')</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; print("-------------- health_check --------------")</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; client_stub.health_check()</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; print("-------------- get_backups --------------")</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; client_stub.get_backups()</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; print("-------------- backing up : ",backupName)</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; client_stub.backup(backupName,<wbr />"full")</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; print("-------------- back up complete : ",backupName)</div>
+<p><br /><br /></p>
+<div>&nbsp; medusa.ini: |</div>
+<div>&nbsp; &nbsp; [cassandra]</div>
+<div>&nbsp; &nbsp; stop_cmd = /opt/cassandra/bin/cassandra stop</div>
+<div>&nbsp; &nbsp; start_cmd = /opt/cassandra/bin/cassandra start</div>
+<div>&nbsp; &nbsp; config_file = /etc/cassandra/cassandra.yaml</div>
+<div>&nbsp; &nbsp; cql_username = cassandra</div>
+<div>&nbsp; &nbsp; cql_password = cassandra</div>
+<div>&nbsp; &nbsp; nodetool_username = jmx_user</div>
+<div>&nbsp; &nbsp; nodetool_password_file_path = /secrets/jmxremote.password</div>
+<div>&nbsp; &nbsp; ;nodetool_host = cassandra-0.cassandra.default.<wbr />svc.cluster.local</div>
+<div>&nbsp; &nbsp; nodetool_port = 7199</div>
+<div>&nbsp; &nbsp; nodetool_flags = "-h ::FFFF:127.0.0.1"</div>
+<div>&nbsp; &nbsp; sstableloader_bin = /opt/cassandra/bin/<wbr />sstableloader</div>
+<div>&nbsp; &nbsp; nodetool_ssl = false</div>
+<div>&nbsp; &nbsp; check_running = nodetool -u jmx_user -pwf /secrets/jmxremote.password &nbsp;version</div>
+<div>&nbsp; &nbsp; resolve_ip_addresses = True</div>
+<div>&nbsp; &nbsp; use_sudo = False</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; [storage]</div>
+<div>&nbsp; &nbsp; storage_provider = google_storage</div>
+<div>&nbsp; &nbsp; region = europe-west1</div>
+<div>&nbsp; &nbsp; bucket_name = cassandrastsbackup</div>
+<div>&nbsp; &nbsp; key_file = /etc/medusa-secrets/medusa_<wbr />gcp_key.json</div>
+<div>&nbsp; &nbsp; prefix = .cassandra</div>
+<div>&nbsp; &nbsp; max_backup_age = 5</div>
+<div>&nbsp; &nbsp; max_backup_count = 0</div>
+<div>&nbsp; &nbsp; transfer_max_bandwidth = 50MB/s</div>
+<div>&nbsp; &nbsp; concurrent_transfers = 1</div>
+<div>&nbsp; &nbsp; multi_part_upload_threshold = 104857600</div>
+<div>&nbsp; &nbsp; backup_grace_period_in_days = 10</div>
+<div>&nbsp; &nbsp; use_sudo_for_restore = False</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; [monitoring]</div>
+<div>&nbsp; &nbsp; ;monitoring_provider = &lt;Provider used for sending metrics. Currently either of "ffwd" or "local"&gt;</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; [ssh]</div>
+<div>&nbsp; &nbsp; username = root</div>
+<div>&nbsp; &nbsp; key_file = /tmp/hostCerts/ssh_host_<wbr />ed25519_key</div>
+<div>&nbsp; &nbsp; cert_file = /tmp/hostCerts/ssh_host_<wbr />ed25519_key-cert.pub</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; [checks]</div>
+<div>&nbsp; &nbsp; ;expected_rows = &lt;Number of rows expected to be returned when the query runs. Not checked if not specified.&gt;</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; [logging]</div>
+<div>&nbsp; &nbsp; ; Controls file logging, disabled by default.</div>
+<div>&nbsp; &nbsp; enabled = 1</div>
+<div>&nbsp; &nbsp; file = medusa.log</div>
+<div>&nbsp; &nbsp; level = DEBUG</div>
+<div>&nbsp; &nbsp; ; Control the log output format</div>
+<div>&nbsp; &nbsp; format = [%(asctime)s] %(levelname)s: %(message)s</div>
+<div>&nbsp; &nbsp; ; Size over which log file will rotate</div>
+<div>&nbsp; &nbsp; maxBytes = 20000000</div>
+<div>&nbsp; &nbsp; ; How many log files to keep</div>
+<div>&nbsp; &nbsp; backupCount = 50</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; [grpc]</div>
+<div>&nbsp; &nbsp; ; Set to true when running in grpc server mode.</div>
+<div>&nbsp; &nbsp; ; Allows to propagate the exceptions instead of exiting the program.</div>
+<div>&nbsp; &nbsp; enabled = 1</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; [kubernetes]</div>
+<div>&nbsp; &nbsp; ; The following settings are only intended to be configured if Medusa is running in containers, preferably in Kubernetes.</div>
+<div>&nbsp; &nbsp; enabled = 1</div>
+<div>&nbsp; &nbsp; ;cassandra_url = &lt;URL of the management API snapshot endpoint. For example: <a href="http://127.0.0.1:8080/api/v0/ops/node/snapshots" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://127.0.0.1:8080/api/v0/ops/node/snapshots&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1ps8yU3sAHg7QsUaumbfwb">http://127.0.0.1:8080/api/v0/<wbr />ops/node/snapshots</a>&gt;</div>
+<div>&nbsp; &nbsp; cassandra_url = <a href="http://127.0.0.1:8778/jolokia/" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://127.0.0.1:8778/jolokia/&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw26IAcGVtvOKNtfEA0pcgrf">http://127.0.0.1:8778/jolokia/</a></div>
+<div>&nbsp; &nbsp; ; Enables the use of the management API to create snapshots. Falls back to using Jolokia if not enabled.</div>
+<div>&nbsp; &nbsp; use_mgmt_api = 0</div>
+<div>```</div>
+<p>&nbsp;</p>
+<div>Apply the CronJob.yaml for backup</div>
+<div>------------------------------<wbr />---</div>
+<div>- Backup Cron Scheduled for 00.35 hrs 6 days a week.</div>
+<div>- ConfigMap scripts is used.</div>
+<div>```</div>
+<div>apiVersion: batch/v1</div>
+<div>kind: CronJob</div>
+<div>metadata:</div>
+<div>&nbsp; name: medusa-grpc-backup</div>
+<div>&nbsp; namespace: &lt;namespace of the sts file&gt;</div>
+<div>spec:</div>
+<div>&nbsp; schedule: "35 0 * * 0-6"</div>
+<div>&nbsp; successfulJobsHistoryLimit: 3</div>
+<div>&nbsp; failedJobsHistoryLimit: 3</div>
+<div>&nbsp; jobTemplate:</div>
+<div>&nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; template:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; metadata:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: medusa-grpc-backup</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; initContainers:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: medusa-copy</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; image: "alpine:3.15"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; resources:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; requests:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cpu: 20m</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; memory: 200Mi</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; imagePullPolicy: IfNotPresent</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; command: ["/bin/sh", "-c"]</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; args:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - cp ./data/scripts/* ./scripts;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; apk add --update --no-cache --quiet curl coreutils; apk --quiet upgrade;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ./scripts/configure_k8s.sh;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sh ./scripts/ascertain_cassandra_<wbr />nodes.sh;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sh ./scripts/copy_yaml.sh;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; echo "yamls copied from cass containers to medusa containers...";</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 10;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: cache-volume</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: "/scripts"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: data-scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /data/scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; containers:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: medusa-grpc-backup</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; image: "python:3.8-slim-buster"</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; resources:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; requests:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cpu: 20m</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; memory: 200Mi</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; imagePullPolicy: IfNotPresent</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; command: ["/bin/sh", "-c"]</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; args:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - apt update -qq &amp;&amp; apt-get install -qq --no-install-recommends git curl &gt; /dev/null;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; rm -rf /var/lib/apt/lists/*;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; git clone <a href="https://github.com/thelastpickle/cassandra-medusa.git" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://github.com/thelastpickle/cassandra-medusa.git&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw2r6aYA5q-HUbFL-fy7KFt4">https://github.com/<wbr />thelastpickle/cassandra-<wbr />medusa.git</a>;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cd cassandra-medusa;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; pip install -r requirements-grpc.txt &gt; /dev/null;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cd medusa/service/grpc;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. medusa.proto;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cp /data/scripts/client.py .;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sh /data/scripts/configure_k8s.<wbr />sh;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sh /data/scripts/ascertain_<wbr />cassandra_nodes.sh;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sh /data/scripts/backup_with_<wbr />medusa.sh;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: data-scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /data/scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; volumes:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: data-scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; configMap:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; defaultMode: 0755</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: scripts</div>
+<div>```</div>
+<p>&nbsp;</p>
+<div>STS Modification Checklist for backup</div>
+<div>------------------------------<wbr />-------</div>
+<div>- Check the manifests are in the same namespace as STS and correct the manifests if its not. Donot apply changes until then.</div>
+<div>- Run the Cronjob to ensure the backup in s3. See the logs of the pod. It should be steady.</div>
+<div>- Check backups inside the bucket post running the CronJob.</div>
+<div>- To ensure the k8ssadra migration works well, ensure there is a perfect backup.</div>
+<div>- Ensure atleast 2 or more sts backups using medusa on the s3 bucket. Check the contents of the s3 bucket as well to find the date and time references.</div>
+<div>- Add random data via a client tool to schemas/tables/column data. Fire backups from the CronJob. Repeat this often. For example.</div>
+<div>```</div>
+<div>CREATE KEYSPACE medusa_test &nbsp;WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};</div>
+<div>USE medusa_test;</div>
+<div>CREATE TABLE users (email text primary key, name text, state text);</div>
+<div>insert into users (email, name, state) values ('<a href="mailto:alice@example.com" target="_blank">alice@example.com</a>', 'Alice Smith', 'TX');</div>
+<div>insert into users (email, name, state) values ('<a href="mailto:bob@example.com" target="_blank">bob@example.com</a>', 'Bob Jones', 'VA');</div>
+<div>insert into users (email, name, state) values ('<a href="mailto:carol@example.com" target="_blank">carol@example.com</a>', 'Carol Jackson', 'CA');</div>
+<div>insert into users (email, name, state) values ('<a href="mailto:david@example.com" target="_blank">david@example.com</a>', 'David Yang', 'NV');</div>
+<div>```</div>
+<div>- The next step is to restore test a backup.</div>
+<p>&nbsp;</p>
+<div>Restore from s3 bucket to vanilla STS backup</div>
+<div>------------------------------<wbr />--------------</div>
+<div>&lt;b&gt;Note&lt;/b&gt;: Submit all the modifications to the sts yaml in one go.</div>
+<div>- To restore from the backup ensure the backups taken above and you have backups visible in the s3 bucket.</div>
+<div>- The cassandra pods should be labled the following via the sts yaml.</div>
+<div>```</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; labels: &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cassandra: restore</div>
+<div>```</div>
+<div>- After the pods restart, please add the following snippet to the &lt;b&gt;initContainer&lt;/b&gt; of the cassandra sts yaml and replace with the correct value for the env variable BACKUP_NAME. e.g. backup-06-03-2022-00-36-16</div>
+<div>- Check the s3 backup bucket for the right reference. And chose which backup reference you like to restore test.</div>
+<div>- For the first time of a restore there is no RESTORE_KEY value so you can set any value to the variable that will be used again. This will be very important key value to fire the restore.</div>
+<div>- The medusa-cass-yaml container block below is used to extract the cassandra.yml as a template from a running statefulset cassandra pod. (its the vanilla statefulset cassandra)</div>
+<div>- Then the template is set with the cassandra pod IP and ported to the medusa-restore container.</div>
+<div>- As and when you save the sts with these changes, the restore is fired from the s3 store against the BACKUP_NAME. The server-config is a shared folder so the /etc/cassandra/cassandra.yaml is passed from &nbsp;medusa-cass-yaml container to medusa-restore container.</div>
+<div>```</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; - name: medusa-cass-yaml</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; image: alpine:3.15</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; imagePullPolicy: IfNotPresent</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; command:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - /bin/sh</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - '-c'</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; args:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - &gt;-</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cp ./data/scripts/* ./scripts;apk add --update --no-cache --quiet curl coreutils; apk --quiet upgrade;./scripts/configure_<wbr />k8s.sh;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2; kubectl get pod -l cassandra=restore --field-selector=status.phase=<wbr />Running -n cassandra | awk -F" " '{print $1}' | grep -v NAME | head -1 &gt; /tmp/firstPod;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 5; kubectl exec pod/"$(cat /tmp/firstPod | sed 's/\r$//')" -c cassandra -n cassandra -- tar cf - /etc/cassandra/cassandra.yaml | tar xvf - -C /tmp &amp;&amp; cat /tmp/etc/cassandra/cassandra.<wbr />yaml &gt; /tmp/cassandra.yaml.template;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 4; cat /tmp/cassandra.yaml.template | sed "s/10\.[0-9]\{1,3\}\.[0-9]\{1,<wbr />3\}\.[0-9]\{1,3\}/$POD_IP/g" &gt; /etc/cassandra/cassandra.yaml;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; sleep 2; cat /etc/cassandra/cassandra.yaml; sleep 10;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; env:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: POD_IP</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; valueFrom:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fieldRef:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; apiVersion: v1</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; fieldPath: status.podIP</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; resources:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; requests:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cpu: 20m</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; memory: 200Mi</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: cache-volume</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: data-scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /data/scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: server-config</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /etc/cassandra</div>
+<p>&nbsp;</p>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; - name: medusa-restore</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; image: <a href="http://docker.io/k8ssandra/medusa:0.11.3" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://docker.io/k8ssandra/medusa:0.11.3&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1dA0lQ9i59FzBn-if5TTdZ">docker.io/k8ssandra/medusa:0.<wbr />11.3</a></div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; imagePullPolicy: IfNotPresent</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; env:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: MEDUSA_MODE</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: RESTORE</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; # Update this value and put some arbitrary string if you want to restore.</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; # The container saves this value and compares next restore so change it every time</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: RESTORE_KEY</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: anyrandomkeyFirstTimeOnly</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; # Update the value with the candidate you want to restore from s3 bucket.</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; # Ensure the bucket has this folder in all the cass node folders. &nbsp;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: BACKUP_NAME</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; value: backup-06-03-2022-00-36-16</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; resources: {}</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: cassandra-medusa</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /etc/medusa</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: server-config</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /etc/cassandra</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: cassandra-data</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /var/lib/cassandra</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: podinfo</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /etc/podinfo</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: google-storage-s3-json</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /etc/medusa-secrets</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: kube-api-access-d9chp</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; readOnly: true</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /var/run/secrets/<a href="http://kubernetes.io/serviceaccount" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://kubernetes.io/serviceaccount&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw2itOb6m_ciZ4EJKbTiNahG">kubernetes.<wbr />io/serviceaccount</a></div>
+<div>```</div>
+<p>&nbsp;</p>
+<div>Restore Checklist</div>
+<div>-----------------</div>
+<div>- The moment the cassandra sts yaml is saved a restore is fired. You would be witnessing a rolling update of pods.</div>
+<div>- Check if all the logs of the medusa-restore initContainer looks good. If all is good, use the Cassandra client tool to check the schema/table values.</div>
+<div>- If all is good, next step is to proceed with the k8ssandra migration as mentioned in the link <a href="https://k8ssandra.io/blog/tutorials/how-to/how-to-migrate-an-existing-cluster-to-k8ssandra-operator-without-any-downtime/" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://k8ssandra.io/blog/tutorials/how-to/how-to-migrate-an-existing-cluster-to-k8ssandra-operator-without-any-downtime/&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1l66eFKEkl68V03o9ZOy6j">https://k8ssandra.io/blog/<wbr />tutorials/how-to/how-to-<wbr />migrate-an-existing-cluster-<wbr />to-k8ssandra-operator-without-<wbr />any-downtime/</a>. Ensure to check the cluster names of the source and the destination.</div>
+<div>- donot empty any files and folders from the s3 bucket.</div>
+<p>&nbsp;</p>
+<div>Migration to k8ssandra from sts</div>
+<div>------------------------------<wbr />-</div>
+<div>This procedure is done post the backup and restore test on plain STS cassandra.</div>
+<p>&nbsp;</p>
+<div>Steps</div>
+<div>-----</div>
+<div>- In the cassandra sts cluster : run `nodetool status` check cassandra status.</div>
+<div>```</div>
+<div>$ nodetool status</div>
+<div>Datacenter: DC1-K8Demo</div>
+<div>=====================</div>
+<div>Status=Up/Down</div>
+<div>|/ State=Normal/Leaving/Joining/<wbr />Moving</div>
+<div>-- &nbsp;Address &nbsp; &nbsp; &nbsp; &nbsp;Load &nbsp; &nbsp; &nbsp;Tokens &nbsp;Owns (effective) &nbsp;Host ID &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Rack</div>
+<div>UN &nbsp;172.31.4.217 &nbsp; 10.2 GiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;9a9b5e8f-c0c2-404d-95e1-<wbr />372880e02c43 &nbsp;us-west-2c</div>
+<div>UN &nbsp;172.31.38.15 &nbsp; 10.2 GiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1e6a9077-bb47-4584-83d5-<wbr />8bed63512fd8 &nbsp;us-west-2b</div>
+<div>UN &nbsp;172.31.22.153 &nbsp;10.2 GiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;d6488a81-be1c-4b07-9145-<wbr />2aa32675282a &nbsp;us-west-2a</div>
+<div>```</div>
+<div>- In Cassandra sts cluster go to the casandra client tool SQL IDE or the cqlsh cli of cassandra container.</div>
+<div>- Alter these keyspaces to use NetworkTopologyStrategy `system_auth,system_<wbr />distributed,system_traces and other non-system/user keyspaces`.</div>
+<div>- Ensure the DC name as used from he `nodetool status` output.</div>
+<div>```</div>
+<div>cqlsh&gt; ALTER KEYSPACE &lt;keyspace_name&gt; WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1-K8Demo': 3};</div>
+<div>```</div>
+<div>- We need to make a new k8ssandra cluster for the cass-operator with the below manifest `values.yaml` in the same namespace.</div>
+<div>- It is optional to keep the same cassandra cluster name as source cluster as the cassandra clients using the new cluster will check for some cluster variables used on the cassandra client-end for eg. CASSANDRA_CLUSTER_NAME or similar. ( please check client app variables that connect cassandra cluster). We have used the same cluster name as source cluster here so that our cassandra client apps donot complain. We have used a different DC name k8s-1 to identify the k8ssandra DC.</div>
+<div>- Update the IP of cassandra-0</div>
+<div>```</div>
+<div># values.yaml</div>
+<div>cassandra:</div>
+<div>&nbsp; # version: "4.0.0"</div>
+<div>&nbsp; version "3.11.12"</div>
+<div>&nbsp; clusterName: "cluster"</div>
+<div>&nbsp; allowMultipleNodesPerWorker: false</div>
+<div>&nbsp; additionalSeeds:</div>
+<div>&nbsp; # it is the cassandra-0 node IP from the cassandra STS cluster (source cluster). Please update this value. Possibly with internal or external IP.</div>
+<div>&nbsp; - 172.31.4.217</div>
+<div>&nbsp; # you can also provide domain name cassandra-0.cassandra.default.<wbr />svc.cluster.local. It should be a service with a valid port</div>
+<div>&nbsp; heap:</div>
+<div>&nbsp; &nbsp;size: 31g</div>
+<div>&nbsp; gc:</div>
+<div>&nbsp; &nbsp; g1:</div>
+<div>&nbsp; &nbsp; &nbsp; enabled: true</div>
+<div>&nbsp; &nbsp; &nbsp; setUpdatingPauseTimePercent: 5</div>
+<div>&nbsp; &nbsp; &nbsp; maxGcPauseMillis: 300</div>
+<div>&nbsp; resources:</div>
+<div>&nbsp; &nbsp; requests:</div>
+<div>&nbsp; &nbsp; &nbsp; memory: "59Gi"</div>
+<div>&nbsp; &nbsp; &nbsp; cpu: "7000m"</div>
+<div>&nbsp; &nbsp; limits:</div>
+<div>&nbsp; &nbsp; &nbsp; memory: "60Gi"</div>
+<div>&nbsp; datacenters:</div>
+<div>&nbsp; - name: k8s-1</div>
+<div>&nbsp; &nbsp; size: 3</div>
+<div>&nbsp; &nbsp; racks:</div>
+<div>&nbsp; &nbsp; - name: r1</div>
+<div>&nbsp; &nbsp; &nbsp; affinityLabels:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; <a href="http://topology.kubernetes.io/zone" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://topology.kubernetes.io/zone&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw0j16UrBMMymoew907P1VOk">topology.kubernetes.io/zone</a>: europe-west-1a</div>
+<div>&nbsp; &nbsp; - name: r2</div>
+<div>&nbsp; &nbsp; &nbsp; affinityLabels:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; <a href="http://topology.kubernetes.io/zone" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://topology.kubernetes.io/zone&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw0j16UrBMMymoew907P1VOk">topology.kubernetes.io/zone</a>: europe-west-1b</div>
+<div>&nbsp; &nbsp; - name: r3</div>
+<div>&nbsp; &nbsp; &nbsp; affinityLabels:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; <a href="http://topology.kubernetes.io/zone" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://topology.kubernetes.io/zone&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw0j16UrBMMymoew907P1VOk">topology.kubernetes.io/zone</a>: europe-west-1c</div>
+<div>&nbsp; ingress:</div>
+<div>&nbsp; &nbsp; enabled: false</div>
+<div>&nbsp; cassandraLibDirVolume:</div>
+<div>&nbsp; &nbsp; storageClass: standard-rwo</div>
+<div>&nbsp; &nbsp; size: 100Gi</div>
+<div>stargate:</div>
+<div>&nbsp; enabled: false</div>
+<div># add medusa config later when migration is a success.</div>
+<div>medusa:</div>
+<div>&nbsp; enabled: false</div>
+<div>reaper-operator:</div>
+<div>&nbsp; enabled: false</div>
+<div>kube-prometheus-stack:</div>
+<div>&nbsp; enabled: false</div>
+<div>reaper:</div>
+<div>&nbsp; enabled: false</div>
+<div>```</div>
+<div>Make the new k8ssandra cluster</div>
+<div>------------------------------</div>
+<div>```</div>
+<div>helm install k8ssandra charts/k8ssandra -n &lt;namespace of the sts file&gt; -f values.yaml</div>
+<div>```</div>
+<div>- do a `nodetool status` after 10 mins in the source cluster cassandra node. Watch the owns(its 0%)</div>
+<div>```</div>
+<div>Datacenter: k8s-1</div>
+<div>=================</div>
+<div>Status=Up/Down</div>
+<div>|/ State=Normal/Leaving/Joining/<wbr />Moving</div>
+<div>-- &nbsp;Address &nbsp; &nbsp; &nbsp; &nbsp;Load &nbsp; &nbsp; &nbsp; Tokens &nbsp;Owns (effective) &nbsp;Host ID &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Rack</div>
+<div>UN &nbsp;10.0.3.10 &nbsp; &nbsp; &nbsp;78.16 KiB &nbsp;16 &nbsp; &nbsp; &nbsp;0.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;c63b9b16-24fe-4232-b146-<wbr />b7c2f450fcc6 &nbsp;europe-west-1a</div>
+<div>UN &nbsp;10.0.2.66 &nbsp; &nbsp; &nbsp;69.14 KiB &nbsp;16 &nbsp; &nbsp; &nbsp;0.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;b1409a2e-cba1-482f-9ea6-<wbr />c895bf296cd9 &nbsp;europe-west-1b</div>
+<div>UN &nbsp;10.0.1.77 &nbsp; &nbsp; &nbsp;69.13 KiB &nbsp;16 &nbsp; &nbsp; &nbsp;0.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;78c53702-7a47-4629-a7bd-<wbr />db41b1705bb8 &nbsp;europe-west-1c</div>
+<div>Datacenter: DC1-K8Demo</div>
+<div>=====================</div>
+<div>Status=Up/Down</div>
+<div>|/ State=Normal/Leaving/Joining/<wbr />Moving</div>
+<div>-- &nbsp;Address &nbsp; &nbsp; &nbsp; &nbsp;Load &nbsp; &nbsp; &nbsp; Tokens &nbsp;Owns (effective) &nbsp;Host ID &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Rack</div>
+<div>UN &nbsp;172.31.4.217 &nbsp; 10.2 GiB &nbsp; 16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;9a9b5e8f-c0c2-404d-95e1-<wbr />372880e02c43 &nbsp;europe-west-1a</div>
+<div>UN &nbsp;172.31.38.15 &nbsp; 10.2 GiB &nbsp; 16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1e6a9077-bb47-4584-83d5-<wbr />8bed63512fd8 &nbsp;europe-west-1b</div>
+<div>UN &nbsp;172.31.22.153 &nbsp;10.2 GiB &nbsp; 16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;d6488a81-be1c-4b07-9145-<wbr />2aa32675282a &nbsp;europe-west-1c</div>
+<div>```</div>
+<div>- Alter the keyspaces in the new k8ssandra cluster.</div>
+<div>- system_auth,system_<wbr />distributed,system_traces and other non-system/user keyspaces.</div>
+<div>```</div>
+<div>cqlsh&gt; ALTER KEYSPACE &lt;keyspace_name&gt; WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1-K8Demo': '3', 'k8s-1': '3'};</div>
+<div>```</div>
+<div>Run rebuild old DC on new cluster</div>
+<div>```</div>
+<div>&nbsp; &nbsp;# kubectl exec -it pod/k8s-1-r1-sts-0 -c &lt;namespace of the sts file&gt; -n k8ssandra -- nodetool rebuild DC1-K8Demo</div>
+<div>&nbsp; &nbsp;# kubectl exec -it pod/k8s-1-r1-sts-1 -c &lt;namespace of the sts file&gt; -n k8ssandra -- nodetool rebuild DC1-K8Demo</div>
+<div>&nbsp; &nbsp;# kubectl exec -it pod/k8s-1-r1-sts-2 -c &lt;namespace of the sts file&gt; -n k8ssandra -- nodetool rebuild DC1-K8Demo</div>
+<div>```</div>
+<div>- final output. Watch the owns ( 100%)</div>
+<div>```</div>
+<div>Datacenter: k8s-1</div>
+<div>=================</div>
+<div>Status=Up/Down</div>
+<div>|/ State=Normal/Leaving/Joining/<wbr />Moving</div>
+<div>-- &nbsp;Address &nbsp; &nbsp; &nbsp; &nbsp;Load &nbsp; &nbsp; &nbsp; Tokens &nbsp;Owns (effective) &nbsp;Host ID &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Rack</div>
+<div>UN &nbsp;10.0.3.10 &nbsp; &nbsp; &nbsp;78.16 KiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;c63b9b16-24fe-4232-b146-<wbr />b7c2f450fcc6 &nbsp;europe-west-1a</div>
+<div>UN &nbsp;10.0.2.66 &nbsp; &nbsp; &nbsp;69.14 KiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;b1409a2e-cba1-482f-9ea6-<wbr />c895bf296cd9 &nbsp;europe-west-1b</div>
+<div>UN &nbsp;10.0.1.77 &nbsp; &nbsp; &nbsp;69.13 KiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;78c53702-7a47-4629-a7bd-<wbr />db41b1705bb8 &nbsp;europe-west-1c</div>
+<div>Datacenter: DC1-K8Demo</div>
+<div>=====================</div>
+<div>Status=Up/Down</div>
+<div>|/ State=Normal/Leaving/Joining/<wbr />Moving</div>
+<div>-- &nbsp;Address &nbsp; &nbsp; &nbsp; &nbsp;Load &nbsp; &nbsp; &nbsp; Tokens &nbsp;Owns (effective) &nbsp;Host ID &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; Rack</div>
+<div>UN &nbsp;172.31.4.217 &nbsp; 10.32 GiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;9a9b5e8f-c0c2-404d-95e1-<wbr />372880e02c43 &nbsp;europe-west-1a</div>
+<div>UN &nbsp;172.31.38.15 &nbsp; 10.32 GiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;1e6a9077-bb47-4584-83d5-<wbr />8bed63512fd8 &nbsp;europe-west-1b</div>
+<div>UN &nbsp;172.31.22.153 &nbsp;10.32 GiB &nbsp;16 &nbsp; &nbsp; &nbsp;100.0% &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;d6488a81-be1c-4b07-9145-<wbr />2aa32675282a &nbsp;europe-west-1c</div>
+<div>```</div>
+<div>- check the data is present in the new cluster.</div>
+<div>- decommission the old cluster. These are commands if the cluster is in the default namespace</div>
+<div>```</div>
+<div>&nbsp; &nbsp;# kubectl exec -it pod/cassandra-0 -c &lt;namespace of the sts file&gt; -n default -- nodetool decommission</div>
+<div>&nbsp; &nbsp;# kubectl exec -it pod/cassandra-1 -c &lt;namespace of the sts file&gt; -n default -- nodetool decommission</div>
+<div>&nbsp; &nbsp;# kubectl exec -it pod/cassandra-2 -c &lt;namespace of the sts file&gt; -n default -- nodetool decommission</div>
+<div>```</div>
+<p>&nbsp;</p>
+<div>Check the schema/tables data on the new k8ssandra cluster</div>
+<div>------------------------------<wbr />---------------------------</div>
+<div>- Use the cassandra client tool and connect to the new k8ssandra cluster using the service file.</div>
+<div>- Ensure the data is all migrated else wait for all migration to complete. Could be 30 mins to 1 hr or depends on the size of the db to migrate.</div>
+<div>- You can do a `du -sh /var/lib/cassandra` on the source and destination cluster cassandra containers often to check the folder size. If it is same for some time the migration is complete.</div>
+<p><br /><br /></p>
+<div>Next steps</div>
+<div>----------</div>
+<div>- Change the clients to point to a new pod selector. Change selector `app: cassandra` to `<a href="http://cassandra.datastax.com/datacenter" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://cassandra.datastax.com/datacenter&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw2q2L9neOA8odkGirK-7U2n">cassandra.datastax.com/<wbr />datacenter</a>: k8s-1` in the same namespace &nbsp;where the sts was working.</div>
+<div>```</div>
+<div>apiVersion: v1</div>
+<div>kind: Service</div>
+<div>metadata:</div>
+<div>&nbsp; labels:</div>
+<div>&nbsp; &nbsp; app: cassandra</div>
+<div>&nbsp; name: cassandra</div>
+<div>&nbsp; namespace: &lt;namespace of the sts file&gt;</div>
+<div>spec:</div>
+<div>&nbsp; ports:</div>
+<div>&nbsp; - port: 9042</div>
+<div>&nbsp; selector:</div>
+<div>&nbsp; &nbsp; <a href="http://cassandra.datastax.com/datacenter" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://cassandra.datastax.com/datacenter&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw2q2L9neOA8odkGirK-7U2n">cassandra.datastax.com/<wbr />datacenter</a>: k8s-1</div>
+<div>```</div>
+<div>- Check with the clients if all is good with the cassandra access.</div>
+<div>- Scale the old STS cluster to 0 nodes. Donot delete it. Keep for future references.</div>
+<div>```</div>
+<div>kubectl scale statefulsets &lt;sts-cassandra-name&gt; -n &lt;namespace of the sts file&gt; --replicas=0</div>
+<div>```</div>
+<div>- Preferably dont delete the PV till about a week ore more when all is good with the new k8ssandra cluster working.</div>
+<p>&nbsp;</p>
+<div>Mesuda for k8ssandra</div>
+<div>--------------------</div>
+<div>- Make new gcs bucket using <a href="https://github.com/thelastpickle/cassandra-medusa/tree/master/docs" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://github.com/thelastpickle/cassandra-medusa/tree/master/docs&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw23ZQEFrY3rbSRwQOkaMlQj">https://github.com/<wbr />thelastpickle/cassandra-<wbr />medusa/tree/master/docs</a> in the same google project and operationalise the medusa on the k8ssandra using the following documentation. <a href="https://docs-v/" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://docs-v&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw25LhzM2T1KEsLK7zD98Dqy">https://docs-v</a>2.k8<a href="http://ssandra.io/components/medusa/" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://ssandra.io/components/medusa/&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw0tla0eAFRZ6L82BC0ybebW">ssandra.io/<wbr />components/medusa/</a> and <a href="https://docs-v/" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://docs-v&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw25LhzM2T1KEsLK7zD98Dqy">https://docs-v</a>2.k8<a href="http://ssandra.io/tasks/backup-restore/gcs/" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://ssandra.io/tasks/backup-restore/gcs/&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw3qDhdv8OOPisZGrar8Fmqo">ssandra.io/<wbr />tasks/backup-restore/gcs/</a>. You should see some changes on the Helm Release file with a new medusa block.</div>
+<div>```</div>
+<div>&nbsp; &nbsp; medusa:</div>
+<div>&nbsp; &nbsp; &nbsp; bucketName: cassandra-medusabackups</div>
+<div>&nbsp; &nbsp; &nbsp; enabled: true</div>
+<div>&nbsp; &nbsp; &nbsp; multiTenant: true</div>
+<div>&nbsp; &nbsp; &nbsp; storage: google_storage</div>
+<div>&nbsp; &nbsp; &nbsp; storageSecret: google-storage-s3-json</div>
+<div>```</div>
+<div>- Create and apply secret using the credentials.json renames as medusa_gcp_key.json</div>
+<div>```</div>
+<div>kubectl create secret generic google-storage-s3-json -n &lt;namespace of the sts file&gt; --from-file=medusa_gcp_key.<wbr />json=/tmp/medusa_gcp_key.json</div>
+<div>```</div>
+<div>- For example you can use the file cassandra_backup.yaml as defined in the abobe mentioned configMap `scripts`.</div>
+<div>```</div>
+<div>&nbsp; cassandra_backup.yaml: |</div>
+<div>&nbsp; &nbsp; apiVersion: cassandra.k8<a href="http://ssandra.io/v" target="_blank" data-saferedirecturl="https://www.google.com/url?q=http://ssandra.io/v&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw1IoNWrs_dDUY58q8Udzccy">ssandra.io/v</a>1alpha<wbr />1</div>
+<div>&nbsp; &nbsp; kind: CassandraBackup</div>
+<div>&nbsp; &nbsp; metadata:</div>
+<div>&nbsp; &nbsp; &nbsp; name: medusa-daily-timestamp</div>
+<div>&nbsp; &nbsp; &nbsp; namespace: &lt;namespace of the sts file&gt;</div>
+<div>&nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; backupType: "differential"</div>
+<div>&nbsp; &nbsp; &nbsp; name: medusa-daily-timestamp</div>
+<div>&nbsp; &nbsp; &nbsp; cassandraDatacenter: k8s-1</div>
+<div>```</div>
+<div>- Apply the CronJob.</div>
+<div>```</div>
+<div>apiVersion: batch/v1beta1</div>
+<div>kind: CronJob</div>
+<div>metadata:</div>
+<div>&nbsp; name: k8ssandra-medusa-backup</div>
+<div>&nbsp; namespace: &lt;namespace of the sts file&gt;</div>
+<div>spec:</div>
+<div>&nbsp; schedule: 35 0 * * 0-6</div>
+<div>&nbsp; concurrencyPolicy: Allow</div>
+<div>&nbsp; suspend: false</div>
+<div>&nbsp; jobTemplate:</div>
+<div>&nbsp; &nbsp; metadata:</div>
+<div>&nbsp; &nbsp; &nbsp; creationTimestamp: null</div>
+<div>&nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; template:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; metadata:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: k8ssandra-medusa-backup</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; spec:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; volumes:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: cache-volume</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; emptyDir: {}</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: data-scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; configMap:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; name: scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; defaultMode: 493</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; containers:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: medusa-backup-cronjob</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; image: alpine:3.15</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; command:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - /bin/sh</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - '-c'</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; args:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - &gt;-</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cp ./data/scripts/* ./scripts; apk add --update --no-cache</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; --quiet curl coreutils; apk --quiet upgrade;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ./scripts/configure_k8s.sh;<wbr />export backupTimestamp="$(date</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; +%Y%m%d%H%M%S)"; echo "Taking diffential Cassandra</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; backup..";cat ./scripts/cassandra_backup.<wbr />yaml | sed</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; s/timestamp/"$backupTimestamp"<wbr />/g | kubectl apply -f -; echo</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; "Lets take a look at the backup resources..";kubectl get</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cronjob;kubectl get cassandrabackups -n cassandra;</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; resources:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; requests:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cpu: 20m</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; memory: 200Mi</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; volumeMounts:</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: data-scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /data/scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; - name: cache-volume</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; mountPath: /scripts</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; terminationMessagePath: /dev/termination-log</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; terminationMessagePolicy: File</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; imagePullPolicy: IfNotPresent</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; restartPolicy: OnFailure</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; terminationGracePeriodSeconds: 30</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; serviceAccountName: medusa-backup</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; serviceAccount: medusa-backup</div>
+<div>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; securityContext: {}</div>
+<div>&nbsp; successfulJobsHistoryLimit: 0</div>
+<div>&nbsp; failedJobsHistoryLimit: 0</div>
+<div>```</div>
+<p>&nbsp;</p>
+<div>Next steps</div>
+<div>----------</div>
+<div>- Ensure the namespace in all the scripts above is same as the namespace of the sts file</div>
+<div>- Run the cronJob and take the backups on the new s3 bucket.</div>
+<div>- Ensure the backup are happening on the k8ssandra steadily.</div>
+<div>- If you want to restore apply the manifest pointing to the backup name. Refer: <a href="https://docs-v2.k8ssandra.io/tasks/backup-restore/#restoring-a-backup" target="_blank" data-saferedirecturl="https://www.google.com/url?q=https://docs-v2.k8ssandra.io/tasks/backup-restore/%23restoring-a-backup&amp;source=gmail&amp;ust=1659075984570000&amp;usg=AOvVaw04xxQeazqXLTFs9KU3-tcp">https://docs-v2.k8ssandra.io/<wbr />tasks/backup-restore/#<wbr />restoring-a-backup</a></div>
+<div class="yj6qo">&nbsp;</div>
+<div class="adL">&nbsp;</div>
