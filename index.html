@@ -8,118 +8,117 @@
 <li>We have a 3 pod vanilla STS cluster with 10 GB disc each. K8Demo is the cluster name.</li>
 <li>We assume some clients old and new are using typical CASSANDRA varaibles to connect to the cluster.</li>
 <li>On gke, make a namespace cassandra and apply the vanilla cassandra sts manifest.</li>
-<li>Ensure all the manifests are in the same namespace of the STS.
-```
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-name: cassandra
-namespace: <namespace of the sts e.g. cassandra>
-labels:
-  app: cassandra
-spec:
-serviceName: cassandra
-replicas: 3
-selector:
-  matchLabels:<pre><code><span class="hljs-symbol">app:</span> cassandra
-</code></pre>template:
-  metadata:<pre><code><span class="hljs-symbol">labels:</span>
-<span class="hljs-symbol">  app:</span> cassandra
-</code></pre>  spec:<pre><code><span class="hljs-attr">terminationGracePeriodSeconds:</span> <span class="hljs-number">1800</span>
-<span class="hljs-attr">containers:</span>
-<span class="hljs-attr">- name:</span> cassandra
-<span class="hljs-attr">  image:</span> gcr.io/google-samples/cassandra:v13
-<span class="hljs-attr">  imagePullPolicy:</span> Always
-<span class="hljs-attr">  ports:</span>
-<span class="hljs-attr">  - containerPort:</span> <span class="hljs-number">7000</span>
-<span class="hljs-attr">    name:</span> intra-node
-<span class="hljs-attr">  - containerPort:</span> <span class="hljs-number">7001</span>
-<span class="hljs-attr">    name:</span> tls-intra-node
-<span class="hljs-attr">  - containerPort:</span> <span class="hljs-number">7199</span>
-<span class="hljs-attr">    name:</span> jmx
-<span class="hljs-attr">  - containerPort:</span> <span class="hljs-number">9042</span>
-<span class="hljs-attr">    name:</span> cql
-<span class="hljs-attr">  resources:</span>
-<span class="hljs-attr">    limits:</span>
-<span class="hljs-attr">      cpu:</span> <span class="hljs-string">"500m"</span>
-<span class="hljs-attr">      memory:</span> <span class="hljs-number">1</span>Gi
-<span class="hljs-attr">    requests:</span>
-<span class="hljs-attr">      cpu:</span> <span class="hljs-string">"500m"</span>
-<span class="hljs-attr">      memory:</span> <span class="hljs-number">1</span>Gi
-<span class="hljs-attr">  securityContext:</span>
-<span class="hljs-attr">    capabilities:</span>
-<span class="hljs-attr">      add:</span>
-<span class="hljs-bullet">        -</span> IPC_LOCK
-<span class="hljs-attr">  lifecycle:</span>
-<span class="hljs-attr">    preStop:</span>
-<span class="hljs-attr">      exec:</span>
-<span class="hljs-attr">        command:</span> 
-<span class="hljs-bullet">        -</span> /bin/sh
-<span class="hljs-bullet">        -</span> -c
-<span class="hljs-bullet">        -</span> nodetool drain
-<span class="hljs-attr">  env:</span>
-<span class="hljs-attr">    - name:</span> MAX_HEAP_SIZE
-<span class="hljs-attr">      value:</span> <span class="hljs-number">512</span>M
-<span class="hljs-attr">    - name:</span> HEAP_NEWSIZE
-<span class="hljs-attr">      value:</span> <span class="hljs-number">100</span>M
-<span class="hljs-attr">    - name:</span> CASSANDRA_SEEDS
-<span class="hljs-attr">      value:</span> <span class="hljs-string">"cassandra-0.cassandra.default.svc.cluster.local"</span>
-<span class="hljs-attr">    - name:</span> CASSANDRA_CLUSTER_NAME
-<span class="hljs-attr">      value:</span> <span class="hljs-string">"K8Demo"</span>
-<span class="hljs-attr">    - name:</span> CASSANDRA_DC
-<span class="hljs-attr">      value:</span> <span class="hljs-string">"DC1-K8Demo"</span>
-<span class="hljs-attr">    - name:</span> CASSANDRA_RACK
-<span class="hljs-attr">      value:</span> <span class="hljs-string">"Rack1-K8Demo"</span>
-<span class="hljs-attr">    - name:</span> POD_IP
-<span class="hljs-attr">      valueFrom:</span>
-<span class="hljs-attr">        fieldRef:</span>
-<span class="hljs-attr">          fieldPath:</span> status.podIP
-<span class="hljs-attr">  readinessProbe:</span>
-<span class="hljs-attr">    exec:</span>
-<span class="hljs-attr">      command:</span>
-<span class="hljs-bullet">      -</span> /bin/bash
-<span class="hljs-bullet">      -</span> -c
-<span class="hljs-bullet">      -</span> /ready-probe.sh
-<span class="hljs-attr">    initialDelaySeconds:</span> <span class="hljs-number">15</span>
-<span class="hljs-attr">    timeoutSeconds:</span> <span class="hljs-number">5</span>
-  <span class="hljs-comment"># These volume mounts are persistent. They are like inline claims,</span>
-  <span class="hljs-comment"># but not exactly because the names need to match exactly one of</span>
-  <span class="hljs-comment"># the stateful pod volumes.</span>
-<span class="hljs-attr">  volumeMounts:</span>
-<span class="hljs-attr">  - name:</span> cassandra-data
-<span class="hljs-attr">    mountPath:</span> /cassandra_data
-</code></pre>volumeClaimTemplates:<ul>
-<li>metadata:
-  name: cassandra-data
-spec:
-  accessModes: [ &quot;ReadWriteOnce&quot; ]
-  storageClassName: standard-rwo
-  resources:<pre><code><span class="hljs-symbol">requests:</span>
-<span class="hljs-symbol">  storage:</span> <span class="hljs-number">10</span>Gi
+<li>Ensure all the manifests are in the same namespace of the STS.<pre><code><span class="hljs-attr">apiVersion:</span> apps/v1
+<span class="hljs-attr">kind:</span> StatefulSet
+<span class="hljs-attr">metadata:</span>
+<span class="hljs-attr">name:</span> cassandra
+<span class="hljs-attr">namespace:</span> &lt;namespace of the sts e.g. cassandra<span class="hljs-string">&gt;
+</span><span class="hljs-attr">labels:</span>
+<span class="hljs-attr">  app:</span> cassandra
+<span class="hljs-attr">spec:</span>
+<span class="hljs-attr">serviceName:</span> cassandra
+<span class="hljs-attr">replicas:</span> <span class="hljs-number">3</span>
+<span class="hljs-attr">selector:</span>
+<span class="hljs-attr">  matchLabels:</span>
+<span class="hljs-attr">    app:</span> cassandra
+<span class="hljs-attr">template:</span>
+<span class="hljs-attr">  metadata:</span>
+<span class="hljs-attr">    labels:</span>
+<span class="hljs-attr">      app:</span> cassandra
+<span class="hljs-attr">  spec:</span>
+<span class="hljs-attr">    terminationGracePeriodSeconds:</span> <span class="hljs-number">1800</span>
+<span class="hljs-attr">    containers:</span>
+<span class="hljs-attr">    - name:</span> cassandra
+<span class="hljs-attr">      image:</span> gcr.io/google-samples/cassandra:v13
+<span class="hljs-attr">      imagePullPolicy:</span> Always
+<span class="hljs-attr">      ports:</span>
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">7000</span>
+<span class="hljs-attr">        name:</span> intra-node
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">7001</span>
+<span class="hljs-attr">        name:</span> tls-intra-node
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">7199</span>
+<span class="hljs-attr">        name:</span> jmx
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">9042</span>
+<span class="hljs-attr">        name:</span> cql
+<span class="hljs-attr">      resources:</span>
+<span class="hljs-attr">        limits:</span>
+<span class="hljs-attr">          cpu:</span> <span class="hljs-string">"500m"</span>
+<span class="hljs-attr">          memory:</span> <span class="hljs-number">1</span>Gi
+<span class="hljs-attr">        requests:</span>
+<span class="hljs-attr">          cpu:</span> <span class="hljs-string">"500m"</span>
+<span class="hljs-attr">          memory:</span> <span class="hljs-number">1</span>Gi
+<span class="hljs-attr">      securityContext:</span>
+<span class="hljs-attr">        capabilities:</span>
+<span class="hljs-attr">          add:</span>
+<span class="hljs-bullet">            -</span> IPC_LOCK
+<span class="hljs-attr">      lifecycle:</span>
+<span class="hljs-attr">        preStop:</span>
+<span class="hljs-attr">          exec:</span>
+<span class="hljs-attr">            command:</span> 
+<span class="hljs-bullet">            -</span> /bin/sh
+<span class="hljs-bullet">            -</span> -c
+<span class="hljs-bullet">            -</span> nodetool drain
+<span class="hljs-attr">      env:</span>
+<span class="hljs-attr">        - name:</span> MAX_HEAP_SIZE
+<span class="hljs-attr">          value:</span> <span class="hljs-number">512</span>M
+<span class="hljs-attr">        - name:</span> HEAP_NEWSIZE
+<span class="hljs-attr">          value:</span> <span class="hljs-number">100</span>M
+<span class="hljs-attr">        - name:</span> CASSANDRA_SEEDS
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"cassandra-0.cassandra.default.svc.cluster.local"</span>
+<span class="hljs-attr">        - name:</span> CASSANDRA_CLUSTER_NAME
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"K8Demo"</span>
+<span class="hljs-attr">        - name:</span> CASSANDRA_DC
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"DC1-K8Demo"</span>
+<span class="hljs-attr">        - name:</span> CASSANDRA_RACK
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"Rack1-K8Demo"</span>
+<span class="hljs-attr">        - name:</span> POD_IP
+<span class="hljs-attr">          valueFrom:</span>
+<span class="hljs-attr">            fieldRef:</span>
+<span class="hljs-attr">              fieldPath:</span> status.podIP
+<span class="hljs-attr">      readinessProbe:</span>
+<span class="hljs-attr">        exec:</span>
+<span class="hljs-attr">          command:</span>
+<span class="hljs-bullet">          -</span> /bin/bash
+<span class="hljs-bullet">          -</span> -c
+<span class="hljs-bullet">          -</span> /ready-probe.sh
+<span class="hljs-attr">        initialDelaySeconds:</span> <span class="hljs-number">15</span>
+<span class="hljs-attr">        timeoutSeconds:</span> <span class="hljs-number">5</span>
+      <span class="hljs-comment"># These volume mounts are persistent. They are like inline claims,</span>
+      <span class="hljs-comment"># but not exactly because the names need to match exactly one of</span>
+      <span class="hljs-comment"># the stateful pod volumes.</span>
+<span class="hljs-attr">      volumeMounts:</span>
+<span class="hljs-attr">      - name:</span> cassandra-data
+<span class="hljs-attr">        mountPath:</span> /cassandra_data
+<span class="hljs-attr">volumeClaimTemplates:</span>
+<span class="hljs-attr">- metadata:</span>
+<span class="hljs-attr">    name:</span> cassandra-data
+<span class="hljs-attr">  spec:</span>
+<span class="hljs-attr">    accessModes:</span> [ <span class="hljs-string">"ReadWriteOnce"</span> ]
+<span class="hljs-attr">    storageClassName:</span> standard-rwo
+<span class="hljs-attr">    resources:</span>
+<span class="hljs-attr">      requests:</span>
+<span class="hljs-attr">        storage:</span> <span class="hljs-number">10</span>Gi
 </code></pre></li>
 </ul>
-</li>
-</ul>
 <hr>
-<p>apiVersion: v1
-kind: Service
-metadata:
-  labels:
-    app: cassandra
-  name: cassandra
-  namespace: <namespace of the sts file>
-spec:
-  ports:</p>
+<pre><code><span class="hljs-attribute">apiVersion</span>: v1
+<span class="hljs-attribute">kind</span>: Service
+<span class="hljs-attribute">metadata</span>:
+  <span class="hljs-attribute">labels</span>:
+    <span class="hljs-attribute">app</span>: cassandra
+  <span class="hljs-attribute">name</span>: cassandra
+  <span class="hljs-attribute">namespace</span>: <span class="hljs-string">"&lt;namespace of the sts file&gt;"</span>
+<span class="hljs-attribute">spec</span>:
+  <span class="hljs-attribute">ports</span>:
+  - <span class="hljs-attribute">port</span>: <span class="hljs-number">9042</span>
+  <span class="hljs-attribute">selector</span>:
+    <span class="hljs-attribute">app</span>: cassandra
+</code></pre><hr>
 <ul>
-<li>port: 9042
-selector:
-app: cassandra
-```<ul>
 <li>In the above yaml there is no medusa support, a popular cassandra backup solution.  </li>
 <li>PV snapshots in google cloud are possible and has their own risks involved.</li>
 </ul>
-</li>
-</ul>
+<hr>
 <h2 id="using-medusa-backup-on-the-vanilla-sts-cassandra-cluster-with-zero-downtime">Using medusa backup on the vanilla sts cassandra cluster with zero downtime</h2>
 <ul>
 <li>Read more about Medusa here. <a href="https://github.com/thelastpickle/cassandra-medusa">https://github.com/thelastpickle/cassandra-medusa</a>. Medusa is also used in k8ssandra operator.Medusa is also offered as a Docker image. </li>
@@ -127,11 +126,13 @@ app: cassandra
 <span class="hljs-attr">storage_provider</span> = google_storage
 <span class="hljs-attr">bucket_name</span> = gcs_bucket_name or replace with the correct s3 bucket name.
 <span class="hljs-attr">key_file</span> = /etc/medusa/medusa_gcp_key.json
-</code></pre>Create and apply secret</li>
+</code></pre></li>
 </ul>
 <hr>
+<p>Create and apply secret</p>
 <pre><code>kubectl <span class="hljs-keyword">create</span> secret generic google-<span class="hljs-keyword">storage</span>-s3-<span class="hljs-keyword">json</span> -n &lt;namespace-<span class="hljs-keyword">of</span>-sts-cassandra&gt; <span class="hljs-comment">--from-file=medusa_gcp_key.json=/tmp/medusa_gcp_key.json</span>
-</code></pre><h2 id="modifying-the-vanilla-cassandra-sts-yaml-file">Modifying the vanilla cassandra STS yaml file</h2>
+</code></pre><hr>
+<h2 id="modifying-the-vanilla-cassandra-sts-yaml-file">Modifying the vanilla cassandra STS yaml file</h2>
 <p><b>Note</b>: Submit all the changes of the sts in one go.</p>
 <ul>
 <li>The idea is to trigger a backup/backups using Medusa via a CronJob.</li>
@@ -228,9 +229,10 @@ app: cassandra
 <span class="hljs-attr">   terminationMessagePolicy:</span> File
 <span class="hljs-attr">   imagePullPolicy:</span> IfNotPresent
 <span class="hljs-attr">   securityContext:</span> {}
-</code></pre>Create and apply the below configMap </li>
+</code></pre></li>
 </ul>
 <hr>
+<h2 id="create-and-apply-the-below-configmap-">Create and apply the below configMap </h2>
 <p><code>cassandra-backup.ConfigMap.yaml</code> to the same namespace as cassandra STS yaml, if not default namespace.It offers </p>
 <ul>
 <li>kubectl cli (configure_k8s.sh)</li>
@@ -274,17 +276,17 @@ configure_k8s.sh: |
   cat /tmp/cassandraIPlist | while read line;do dig -x $line +short | awk -F&quot;.&quot; &#39;{print $1}&#39; &gt;&gt; /tmp/cassandrahostlist;done
   sleep 1;</p>
 <p>ascertain_cassandra_nodes.sh: |
-  #!/bin/sh </p>
-<h1 id="change-namesapce-to-default-if-it-is-needed-check-which-namespace-the-cassandra-sts-pods-are-running-in-the-source-cluster-">change namesapce to default if it is needed. Check which namespace the cassandra sts pods are running in the source cluster.</h1>
-<p>  kubectl exec -it cassandra-0 -n cassandra -c cassandra -- bash -c &quot;[[ -f /secrets/jmxremote.password ]] &amp;&amp; nodetool -h ::FFFF:127.0.0.1 -u jmx_user -pwf /secrets/jmxremote.password status | grep UN | cut -d &#39; &#39; -f3 &gt; /tmp/cassandraIPlist&quot;;sleep 1;</p>
+  #!/bin/sh 
+  #change namesapce to default if it is needed. Check which namespace the cassandra sts pods are running in the source cluster.
+  kubectl exec -it cassandra-0 -n cassandra -c cassandra -- bash -c &quot;[[ -f /secrets/jmxremote.password ]] &amp;&amp; nodetool -h ::FFFF:127.0.0.1 -u jmx_user -pwf /secrets/jmxremote.password status | grep UN | cut -d &#39; &#39; -f3 &gt; /tmp/cassandraIPlist&quot;;sleep 1;</p>
 <p>  kubectl exec -it cassandra-0 -n cassandra -c cassandra -- bash -c &quot;./scripts/medusa-scripts/get_cassandra_node_names.sh&quot;;sleep 1;
   kubectl exec -it cassandra-0 -n cassandra -c cassandra -- bash -c &quot;cat /tmp/cassandrahostlist&quot; | tee /tmp/hostlist;
   echo &quot;nodes acertained&quot;;sleep 5;</p>
 <p>copy_yaml.sh: |
-  #!/bin/sh</p>
-<h1 id="the-idea-was-to-copy-the-cassandra-yaml-from-cassandra-node-to-medusa-container-in-cassandra-nodes-for-example-a-3-node-cassandra-">the idea was to copy the cassandra yaml from cassandra node to medusa container in cassandra nodes.  for example a 3 node cassandra.</h1>
-<h1 id="change-namesapce-to-default-if-it-is-needed-the-cassandra-node-should-be-available-in-the-namespace-">change namesapce to default if it is needed. the cassandra node should be available  in the namespace.</h1>
-<p>  for node in $(cat /tmp/hostlist)
+  #!/bin/sh
+  #the idea was to copy the cassandra yaml from cassandra node to medusa container in cassandra nodes.  for example a 3 node cassandra. 
+  #change namesapce to default if it is needed. the cassandra node should be available  in the namespace. 
+  for node in $(cat /tmp/hostlist)
   do</p>
 <pre><code>nodename=<span class="hljs-string">"$(echo $node| sed 's/\r$//')"</span>
 sleep <span class="hljs-number">2</span>
@@ -494,7 +496,7 @@ sleep 20;
 <span class="hljs-attr">use_mgmt_api</span> = <span class="hljs-number">0</span>
 </code></pre><pre><code>
 <span class="hljs-section">Apply the CronJob.yaml for backup
----------------------------------</span>
+----------------------------</span>
 <span class="hljs-bullet">- </span>Backup Cron Scheduled for 00.35 hrs 6 days a week.
 <span class="hljs-bullet">- </span>ConfigMap scripts is used.
 </code></pre><p>apiVersion: batch/v1
