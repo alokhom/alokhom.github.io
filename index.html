@@ -299,7 +299,6 @@ data:
       kubectl <span class="hljs-keyword">exec</span> pod/$nodename -n cassandra -c cassandra -- tar cf - /etc/cassandra/cassandra.yaml | kubectl <span class="hljs-keyword">exec</span> -i pod/$nodename -n cassandra -c medusa -- bash -c <span class="hljs-string">'tar xvf - -C /tmp &amp;&amp; if [ -f /etc/cassandra/cassandra.yaml  ];then rm -f /etc/cassandra/cassandra.yaml; fi; cp /tmp/etc/cassandra/cassandra.yaml /etc/cassandra &amp;&amp; ls /etc/cassandra &amp;&amp; sleep 2'</span>;sleep <span class="hljs-number">5</span>;
     done
 
-
   backup_with_medusa.sh: |
     <span class="hljs-comment">#!/bin/sh</span>
     cp insert.py client_candidate.py
