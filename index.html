@@ -834,6 +834,7 @@ UN  172.31.22.153  10.32 GiB  16      100.0%            d6488a81-be1c-4b07-9145-
     <li>Ensure the data is all migrated else wait for all migration to complete. Could be 30 mins to 1 hr or depends on the size of the db to migrate. </li>
     <li>You can do a <code>du -sh /var/lib/cassandra</code> on the source and destination cluster cassandra containers often to check the folder size. If it is same for some time the migration is complete. </li>
 </ul>
+<hr>
 <h2 id="next-steps">Next steps</h2>
 <ul>
     <li>Change the clients to point to a new pod selector. Change selector <code>app: cassandra</code> to <code>cassandra.datastax.com/datacenter: k8s-1</code> in the same namespace where the sts was working. <pre><code><span class="hljs-attr">apiVersion:</span> v1
