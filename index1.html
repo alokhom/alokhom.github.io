@@ -1,0 +1,951 @@
+<h2 id="migrate-from-cassandra-in-a-vanilla-sts-to-k8ssandra">Migrate from Cassandra in a vanilla STS to K8ssandra</h2>
+<p>Most users of k8ssandra have either started a new Cassandra cluster or have migrated from an existing Cassandra cluster. </p>
+<p>In containerized Cassandra clusters like the vanilla STS Cassandra cluster, there is no backups made perhaps (besides disc snapsots) or rather Admins are stuck in a assumption that the migration to k8ssandra is straight forward and flawless. </p>
+<p>The Risk is what if the migration to k8ssandra is not a success ? And therefore what is the fallback / migrating plan from a STS cluster point of view. It involves risk of losing data. Can we have a backup/restore test on the vanilla STS cluster before
+    we proceed with migration to k8ssandra cluster ?</p>
+<p>There is no documented procedure on the internet for backup and restore of vanilla STS cluster and an attempt was made with this solution and it kind of works. Repo: <a href="https://github.com/alokhom/cassandra-statefulset-to-k8ssandra-migration">https://github.com/alokhom/cassandra-statefulset-to-k8ssandra-migration</a>    </p>
+<hr>
+<h2 id="to-simulate-the-scenario-let-us-make-a-sts-cluster-on-gke-">To simulate the scenario let us make a STS cluster on gke </h2>
+<ul>
+    <li>We have a 3 pod vanilla STS cluster with 10 GB disc each. K8Demo is the cluster name.</li>
+    <li>We assume some clients old and new are using typical CASSANDRA varaibles to connect to the cluster.</li>
+    <li>On gke, make a namespace cassandra and apply the vanilla cassandra sts manifest.</li>
+    <li>Ensure all the manifests are in the same namespace of the STS.<pre><code><span class="hljs-attr">apiVersion:</span> apps/v1
+<span class="hljs-attr">kind:</span> StatefulSet
+<span class="hljs-attr">metadata:</span>
+<span class="hljs-attr">name:</span> cassandra
+<span class="hljs-attr">namespace:</span> &lt;namespace of the sts e.g. cassandra<span class="hljs-string">&gt;
+</span><span class="hljs-attr">labels:</span>
+<span class="hljs-attr">  app:</span> cassandra
+<span class="hljs-attr">spec:</span>
+<span class="hljs-attr">serviceName:</span> cassandra
+<span class="hljs-attr">replicas:</span> <span class="hljs-number">3</span>
+<span class="hljs-attr">selector:</span>
+<span class="hljs-attr">  matchLabels:</span>
+<span class="hljs-attr">    app:</span> cassandra
+<span class="hljs-attr">template:</span>
+<span class="hljs-attr">  metadata:</span>
+<span class="hljs-attr">    labels:</span>
+<span class="hljs-attr">      app:</span> cassandra
+<span class="hljs-attr">  spec:</span>
+<span class="hljs-attr">    terminationGracePeriodSeconds:</span> <span class="hljs-number">1800</span>
+<span class="hljs-attr">    containers:</span>
+<span class="hljs-attr">    - name:</span> cassandra
+<span class="hljs-attr">      image:</span> gcr.io/google-samples/cassandra:v13
+<span class="hljs-attr">      imagePullPolicy:</span> Always
+<span class="hljs-attr">      ports:</span>
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">7000</span>
+<span class="hljs-attr">        name:</span> intra-node
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">7001</span>
+<span class="hljs-attr">        name:</span> tls-intra-node
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">7199</span>
+<span class="hljs-attr">        name:</span> jmx
+<span class="hljs-attr">      - containerPort:</span> <span class="hljs-number">9042</span>
+<span class="hljs-attr">        name:</span> cql
+<span class="hljs-attr">      resources:</span>
+<span class="hljs-attr">        limits:</span>
+<span class="hljs-attr">          cpu:</span> <span class="hljs-string">"500m"</span>
+<span class="hljs-attr">          memory:</span> <span class="hljs-number">1</span>Gi
+<span class="hljs-attr">        requests:</span>
+<span class="hljs-attr">          cpu:</span> <span class="hljs-string">"500m"</span>
+<span class="hljs-attr">          memory:</span> <span class="hljs-number">1</span>Gi
+<span class="hljs-attr">      securityContext:</span>
+<span class="hljs-attr">        capabilities:</span>
+<span class="hljs-attr">          add:</span>
+<span class="hljs-bullet">            -</span> IPC_LOCK
+<span class="hljs-attr">      lifecycle:</span>
+<span class="hljs-attr">        preStop:</span>
+<span class="hljs-attr">          exec:</span>
+<span class="hljs-attr">            command:</span> 
+<span class="hljs-bullet">            -</span> /bin/sh
+<span class="hljs-bullet">            -</span> -c
+<span class="hljs-bullet">            -</span> nodetool drain
+<span class="hljs-attr">      env:</span>
+<span class="hljs-attr">        - name:</span> MAX_HEAP_SIZE
+<span class="hljs-attr">          value:</span> <span class="hljs-number">512</span>M
+<span class="hljs-attr">        - name:</span> HEAP_NEWSIZE
+<span class="hljs-attr">          value:</span> <span class="hljs-number">100</span>M
+<span class="hljs-attr">        - name:</span> CASSANDRA_SEEDS
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"cassandra-0.cassandra.default.svc.cluster.local"</span>
+<span class="hljs-attr">        - name:</span> CASSANDRA_CLUSTER_NAME
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"K8Demo"</span>
+<span class="hljs-attr">        - name:</span> CASSANDRA_DC
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"DC1-K8Demo"</span>
+<span class="hljs-attr">        - name:</span> CASSANDRA_RACK
+<span class="hljs-attr">          value:</span> <span class="hljs-string">"Rack1-K8Demo"</span>
+<span class="hljs-attr">        - name:</span> POD_IP
+<span class="hljs-attr">          valueFrom:</span>
+<span class="hljs-attr">            fieldRef:</span>
+<span class="hljs-attr">              fieldPath:</span> status.podIP
+<span class="hljs-attr">      readinessProbe:</span>
+<span class="hljs-attr">        exec:</span>
+<span class="hljs-attr">          command:</span>
+<span class="hljs-bullet">          -</span> /bin/bash
+<span class="hljs-bullet">          -</span> -c
+<span class="hljs-bullet">          -</span> /ready-probe.sh
+<span class="hljs-attr">        initialDelaySeconds:</span> <span class="hljs-number">15</span>
+<span class="hljs-attr">        timeoutSeconds:</span> <span class="hljs-number">5</span>
+      <span class="hljs-comment"># These volume mounts are persistent. They are like inline claims,</span>
+      <span class="hljs-comment"># but not exactly because the names need to match exactly one of</span>
+      <span class="hljs-comment"># the stateful pod volumes.</span>
+<span class="hljs-attr">      volumeMounts:</span>
+<span class="hljs-attr">      - name:</span> cassandra-data
+<span class="hljs-attr">        mountPath:</span> /cassandra_data
+<span class="hljs-attr">volumeClaimTemplates:</span>
+<span class="hljs-attr">- metadata:</span>
+<span class="hljs-attr">    name:</span> cassandra-data
+<span class="hljs-attr">  spec:</span>
+<span class="hljs-attr">    accessModes:</span> [ <span class="hljs-string">"ReadWriteOnce"</span> ]
+<span class="hljs-attr">    storageClassName:</span> standard-rwo
+<span class="hljs-attr">    resources:</span>
+<span class="hljs-attr">      requests:</span>
+<span class="hljs-attr">        storage:</span> <span class="hljs-number">10</span>Gi
+</code></pre></li>
+</ul>
+<hr>
+<pre><code><span class="hljs-attr">apiVersion:</span> v1
+<span class="hljs-attr">kind:</span> Service
+<span class="hljs-attr">metadata:</span>
+<span class="hljs-attr">  labels:</span>
+<span class="hljs-attr">    app:</span> cassandra
+<span class="hljs-attr">  name:</span> cassandra
+<span class="hljs-attr">  namespace:</span> &lt;namespace of the sts file<span class="hljs-string">&gt;
+</span><span class="hljs-attr">spec:</span>
+<span class="hljs-attr">  ports:</span>
+<span class="hljs-attr">  - port:</span> <span class="hljs-number">9042</span>
+<span class="hljs-attr">  selector:</span>
+<span class="hljs-attr">    app:</span> cassandra
+</code></pre>
+<hr>
+<ul>
+    <li>In the above yaml there is no medusa support, a popular cassandra backup solution. </li>
+    <li>PV snapshots in google cloud are possible and has their own risks involved.</li>
+</ul>
+<hr>
+<h2 id="using-medusa-backup-on-the-vanilla-sts-cassandra-cluster-with-zero-downtime">Using medusa backup on the vanilla sts cassandra cluster with zero downtime</h2>
+<ul>
+    <li>Read more about Medusa here. <a href="https://github.com/thelastpickle/cassandra-medusa">https://github.com/thelastpickle/cassandra-medusa</a>. Medusa is also used in k8ssandra operator.Medusa is also offered as a Docker image. </li>
+    <li>You will need a s3 storage bucket to backup and restore the vanilla cassandra STS cluster. For this demo we have selected the gcs setup from <a href="https://github.com/thelastpickle/cassandra-medusa/tree/master/docs">https://github.com/thelastpickle/cassandra-medusa/tree/master/docs</a>.
+        You could select your own s3 preference. Refer to the medusa.ini inside the ConfigMap referred below to find the storage stub. Ensure the file name is medusa_gcp_key.json and use the bucket name that was created.<pre><code><span class="hljs-section">[storage]</span>
+<span class="hljs-attr">storage_provider</span> = google_storage
+<span class="hljs-attr">bucket_name</span> = gcs_bucket_name or replace with the correct s3 bucket name.
+<span class="hljs-attr">key_file</span> = /etc/medusa/medusa_gcp_key.json
+</code></pre></li>
+</ul>
+<hr>
+<h2 id="create-and-apply-secret">Create and apply secret</h2>
+<pre><code>kubectl <span class="hljs-keyword">create</span> secret generic google-<span class="hljs-keyword">storage</span>-s3-<span class="hljs-keyword">json</span> -n &lt;namespace-<span class="hljs-keyword">of</span>-sts-cassandra&gt; <span class="hljs-comment">--from-file=medusa_gcp_key.json=/tmp/medusa_gcp_key.json</span>
+</code></pre>
+<hr>
+<h2 id="modifying-the-vanilla-cassandra-sts-yaml-file">Modifying the vanilla cassandra STS yaml file</h2>
+<p><b>Note</b>: Submit all the changes of the sts in one go.</p>
+<ul>
+    <li>The idea is to trigger a backup/backups using Medusa via a CronJob.</li>
+    <li>Edit the STS yaml file.</li>
+    <li>We will use the jolokia jvm agent for backing up here via the initContainer and volumeMount on the cassandra sts container. Management API is not used here. Reference: <a href="https://github.com/thelastpickle/cassandra-medusa/tree/master/k8s">https://github.com/thelastpickle/cassandra-medusa/tree/master/k8s</a></li>
+    <li>The jolokia-share volume helps provide the jolokia jar from the initContainer to the medusa container.</li>
+    <li>Add the jolokia initContainer code block to the cassandra sts yaml<pre><code>initContainers:
+ -<span class="ruby"> <span class="hljs-symbol">name:</span> install-jolokia-jvm-agent
+</span>   image: busybox
+   command:
+     -<span class="ruby"> sh
+</span>     -<span class="ruby"> <span class="hljs-string">'-c'</span>
+</span>     -<span class="ruby"> &gt;-
+</span>       wget -O /usr/share/java/jolokia-jvm-1.6.2-agent.jar
+       http://search.maven.org/remotecontent?filepath=org/jolokia/jolokia-jvm/1.6.2/jolokia-jvm-1.6.2-agent.jar
+   resources: {}
+   volumeMounts:
+     -<span class="ruby"> <span class="hljs-symbol">name:</span> jolokia-share
+</span>       mountPath: /usr/share/java
+</code></pre></li>
+    <li>Add extra volumes on the cassandra sts yaml.<pre><code><span class="hljs-attr">volumes:</span>
+<span class="hljs-attr"> - name:</span> jolokia-share
+<span class="hljs-attr">   emptyDir:</span> {}
+<span class="hljs-attr"> - name:</span> server-config
+<span class="hljs-attr">   emptyDir:</span> {}
+<span class="hljs-attr"> - name:</span> cassandra-medusa
+<span class="hljs-attr">   configMap:</span>
+<span class="hljs-attr">     name:</span> scripts
+<span class="hljs-attr">     items:</span>
+<span class="hljs-attr">       - key:</span> medusa.ini
+<span class="hljs-attr">         path:</span> medusa.ini
+<span class="hljs-attr"> - name:</span> google-storage-s3-json
+<span class="hljs-attr">   secret:</span>
+<span class="hljs-attr">     secretName:</span> google-storage-s3-json
+<span class="hljs-attr">     defaultMode:</span> <span class="hljs-number">420</span>
+<span class="hljs-attr"> - name:</span> medusa-scripts
+<span class="hljs-attr">   configMap:</span> 
+<span class="hljs-attr">     defaultMode:</span> <span class="hljs-number">0755</span>
+<span class="hljs-attr">     name:</span> scripts
+<span class="hljs-attr">     items:</span>
+<span class="hljs-attr">       - key:</span> get_cassandra_node_names.sh
+<span class="hljs-attr">         path:</span> get_cassandra_node_names.sh
+</code></pre></li>
+    <li>Modify/add volumeMounts on the cassandra container.<pre><code><span class="hljs-symbol">   volumeMounts:</span>
+     - name: medusa-scripts
+<span class="hljs-symbol">       mountPath:</span> <span class="hljs-meta-keyword">/scripts/</span>medusa-scripts/
+</code></pre></li>
+    <li>Modify/add the environment variables to the sts cassandra container. Ensure the value for variable CASSANDRA_DC(if not there). <pre><code>           - <span class="hljs-keyword">name</span>: CASSANDRA_DC
+             <span class="hljs-keyword">value</span>: K8Demo
+           - <span class="hljs-keyword">name</span>: CASSANDRA_ENDPOINT_SNITCH
+             <span class="hljs-keyword">value</span>: GossipingPropertyFileSnitch
+           - <span class="hljs-keyword">name</span>: JVM_EXTRA_OPTS
+             <span class="hljs-keyword">value</span>: -javaagent:/usr/share/java/jolokia-jvm-<span class="hljs-number">1.6.</span><span class="hljs-number">2</span>-agent.jar=port=<span class="hljs-number">8778</span>,host=localhost
+</code></pre></li>
+    <li>Add the medusa container block to the sts manifest<pre><code><span class="hljs-attr"> - name:</span> medusa
+<span class="hljs-attr">   image:</span> docker.io/k8ssandra/medusa:<span class="hljs-number">0.12</span><span class="hljs-number">.2</span>
+<span class="hljs-attr">   ports:</span>
+<span class="hljs-attr">     - containerPort:</span> <span class="hljs-number">50051</span>
+<span class="hljs-attr">       protocol:</span> TCP
+<span class="hljs-attr">   env:</span>
+<span class="hljs-attr">     - name:</span> MEDUSA_MODE
+<span class="hljs-attr">       value:</span> GRPC
+<span class="hljs-attr">   resources:</span> {}
+<span class="hljs-attr">   volumeMounts:</span>
+<span class="hljs-attr">     - name:</span> server-config
+<span class="hljs-attr">       mountPath:</span> /etc/cassandra
+<span class="hljs-attr">     - name:</span> cassandra-medusa
+<span class="hljs-attr">       mountPath:</span> /etc/medusa
+<span class="hljs-attr">     - name:</span> cassandra-data
+<span class="hljs-attr">       mountPath:</span> /var/lib/cassandra
+<span class="hljs-attr">     - name:</span> google-storage-s3-json
+<span class="hljs-attr">       mountPath:</span> /etc/medusa-secrets
+<span class="hljs-attr">   livenessProbe:</span>
+<span class="hljs-attr">     exec:</span>
+<span class="hljs-attr">       command:</span>
+<span class="hljs-bullet">         -</span> /bin/grpc_health_probe
+<span class="hljs-bullet">         -</span> <span class="hljs-string">'-addr=:50051'</span>
+<span class="hljs-attr">     initialDelaySeconds:</span> <span class="hljs-number">10</span>
+<span class="hljs-attr">     timeoutSeconds:</span> <span class="hljs-number">1</span>
+<span class="hljs-attr">     periodSeconds:</span> <span class="hljs-number">10</span>
+<span class="hljs-attr">     successThreshold:</span> <span class="hljs-number">1</span>
+<span class="hljs-attr">     failureThreshold:</span> <span class="hljs-number">3</span>
+<span class="hljs-attr">   readinessProbe:</span>
+<span class="hljs-attr">     exec:</span>
+<span class="hljs-attr">       command:</span>
+<span class="hljs-bullet">         -</span> /bin/grpc_health_probe
+<span class="hljs-bullet">         -</span> <span class="hljs-string">'-addr=:50051'</span>
+<span class="hljs-attr">     initialDelaySeconds:</span> <span class="hljs-number">5</span>
+<span class="hljs-attr">     timeoutSeconds:</span> <span class="hljs-number">1</span>
+<span class="hljs-attr">     periodSeconds:</span> <span class="hljs-number">10</span>
+<span class="hljs-attr">     successThreshold:</span> <span class="hljs-number">1</span>
+<span class="hljs-attr">     failureThreshold:</span> <span class="hljs-number">3</span>
+<span class="hljs-attr">   terminationMessagePath:</span> /dev/termination-log
+<span class="hljs-attr">   terminationMessagePolicy:</span> File
+<span class="hljs-attr">   imagePullPolicy:</span> IfNotPresent
+<span class="hljs-attr">   securityContext:</span> {}
+</code></pre></li>
+</ul>
+<hr>
+<h2 id="create-and-apply-the-below-configmap-">Create and apply the below configMap </h2>
+<p><code>cassandra-backup.ConfigMap.yaml</code> to the same namespace as cassandra STS yaml, if not default namespace.It offers </p>
+<ul>
+    <li>kubectl cli (configure_k8s.sh)</li>
+    <li>Discovering cassandra nodes names (ascertain_cassandra_nodes.sh and get_cassandra_node_names.sh)</li>
+    <li>Copying the cassandra.yml file from the cassandra-0 node to the medusa container of all nodes. </li>
+    <li>Firing backup from a python file. (backup_with_medusa.sh and insert.py)</li>
+    <li>The Cassandra Administrator is requested to add the right jmx password as follows in the file jmxremote.password<pre><code><span class="hljs-keyword">jmx_user </span><span class="hljs-keyword">jmx123</span>
+</code></pre></li>
+    <li>The Cassandra Administrator is requested to add the right jmx user as follows in the file jmxremote.access.<pre><code>jmx_user <span class="hljs-keyword">readwrite</span>
+</code></pre>Ensure the correct nodetool username as jmx_user and configure it in the medusa.ini<pre><code><span class="hljs-attr">nodetool_username</span> = jmx_user
+</code></pre></li>
+    <li>Medusa needs a medusa ini file configuration to be used for backup. (medusa.ini). This ini file also has the storage configuration of s3 and credentials of nodetool password. The grpc should be enabled (enabled = 1). Kubernetes should be enabled and
+        cassandra_url should point to <a href="http://127.0.0.1:8778/jolokia/">http://127.0.0.1:8778/jolokia/</a> . Management API is turned off. (use_mgmt_api = 0) <b>Note</b>: Make changes to the medusa.ini block whereever it requires, e.g. file and
+        path of nodetool_password_file_path.
+        <b>Note</b>: Ensure the <code>-n cassandra</code> is updated in the configMap to a valid namespace. i.e.
+        <namespace of the sts e.g. cassandra>
+            ```</li>
+</ul>
+<pre><code>kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: scripts
+  namespace: &lt;namespace-of-sts-cassandra&gt;
+data:
+  configure_k8s.sh: |
+    <span class="hljs-comment">#!/bin/sh</span>
+    curl -sLO <span class="hljs-string">"https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"</span> &amp;&amp; chmod +x kubectl &amp;&amp; mv ./kubectl /usr/bin/kubectl
+    echo <span class="hljs-string">"kubectl installed"</span>
+
+  cassandra_backup.yaml: |
+    apiVersion: cassandra.k8ssandra.io/v1alpha1
+    kind: CassandraBackup
+    metadata:
+      name: medusa-daily-timestamp
+      namespace: &lt;namespace of the sts e.g. cassandra&gt;
+    spec:
+      backupType: <span class="hljs-string">"differential"</span>
+      name: medusa-daily-timestamp
+      cassandraDatacenter: k8s<span class="hljs-number">-1</span>
+
+  get_cassandra_node_names.sh: |
+    <span class="hljs-comment">#!/bin/sh</span>
+    apt-get update &gt; /dev/null
+    apt-get install sudo -y &gt; /dev/null
+    apt-get install dnsutils -qq &gt;/tmp/dns.out;
+    <span class="hljs-keyword">if</span> [ -f /tmp/cassandrahostlist ];then rm /tmp/cassandrahostlist; fi
+    cat /tmp/cassandraIPlist | <span class="hljs-keyword">while</span> read line;do dig -x $line +short | awk -F<span class="hljs-string">"."</span> <span class="hljs-string">'{print $1}'</span> &gt;&gt; /tmp/cassandrahostlist;done
+    sleep <span class="hljs-number">1</span>;
+
+  ascertain_cassandra_nodes.sh: |
+    <span class="hljs-comment">#!/bin/sh </span>
+    <span class="hljs-comment">#change namesapce to default if it is needed. Check which namespace the cassandra sts pods are running in the source cluster.</span>
+    kubectl <span class="hljs-keyword">exec</span> -it cassandra<span class="hljs-number">-0</span> -n cassandra -c cassandra -- bash -c <span class="hljs-string">"[[ -f /secrets/jmxremote.password ]] &amp;&amp; nodetool -h ::FFFF:127.0.0.1 -u jmx_user -pwf /secrets/jmxremote.password status | grep UN | cut -d ' ' -f3 &gt; /tmp/cassandraIPlist"</span>;sleep <span class="hljs-number">1</span>;
+
+    kubectl <span class="hljs-keyword">exec</span> -it cassandra<span class="hljs-number">-0</span> -n cassandra -c cassandra -- bash -c <span class="hljs-string">"./scripts/medusa-scripts/get_cassandra_node_names.sh"</span>;sleep <span class="hljs-number">1</span>;
+    kubectl <span class="hljs-keyword">exec</span> -it cassandra<span class="hljs-number">-0</span> -n cassandra -c cassandra -- bash -c <span class="hljs-string">"cat /tmp/cassandrahostlist"</span> | tee /tmp/hostlist;
+    echo <span class="hljs-string">"nodes acertained"</span>;sleep <span class="hljs-number">5</span>;
+
+  copy_yaml.sh: |
+    <span class="hljs-comment">#!/bin/sh</span>
+    <span class="hljs-comment">#the idea was to copy the cassandra yaml from cassandra node to medusa container in cassandra nodes.  for example a 3 node cassandra. </span>
+    <span class="hljs-comment">#change namesapce to default if it is needed. the cassandra node should be available  in the namespace. </span>
+    <span class="hljs-keyword">for</span> node <span class="hljs-keyword">in</span> $(cat /tmp/hostlist)
+    do
+      nodename=<span class="hljs-string">"$(echo $node| sed 's/\r$//')"</span>
+      sleep <span class="hljs-number">2</span>
+      kubectl <span class="hljs-keyword">exec</span> pod/$nodename -n cassandra -c cassandra -- tar cf - /etc/cassandra/cassandra.yaml | kubectl <span class="hljs-keyword">exec</span> -i pod/$nodename -n cassandra -c medusa -- bash -c <span class="hljs-string">'tar xvf - -C /tmp &amp;&amp; if [ -f /etc/cassandra/cassandra.yaml  ];then rm -f /etc/cassandra/cassandra.yaml; fi; cp /tmp/etc/cassandra/cassandra.yaml /etc/cassandra &amp;&amp; ls /etc/cassandra &amp;&amp; sleep 2'</span>;sleep <span class="hljs-number">5</span>;
+    done
+
+  backup_with_medusa.sh: |
+    <span class="hljs-comment">#!/bin/sh</span>
+    cp insert.py client_candidate.py
+    sleep <span class="hljs-number">1</span>
+    dateTime=backup-<span class="hljs-string">"$(date +"</span>%m-%d-%Y-%H-%M-%S<span class="hljs-string">")"</span>
+    <span class="hljs-keyword">for</span> node <span class="hljs-keyword">in</span> $(cat /tmp/hostlist)
+    do
+      nodename=<span class="hljs-string">"$(echo $node| sed 's/\r$//').cassandra"</span>
+      sleep <span class="hljs-number">5</span>
+      echo <span class="hljs-string">"............ starting backup of $nodename ...."</span>
+      sleep <span class="hljs-number">5</span>
+      cat client_candidate.py | sed -e s/localhost/<span class="hljs-string">"$nodename"</span>/g  &gt; client.py
+      sleep <span class="hljs-number">5</span>
+      python ./client.py <span class="hljs-string">"$dateTime"</span>
+      sleep <span class="hljs-number">5</span>
+      echo <span class="hljs-string">"............ backup of $nodename complete...."</span>
+      sleep <span class="hljs-number">5</span>
+    done
+    sleep <span class="hljs-number">20</span>;
+
+  insert.py: |
+    <span class="hljs-keyword">import</span> time
+    <span class="hljs-keyword">from</span> datetime <span class="hljs-keyword">import</span> datetime
+    <span class="hljs-keyword">import</span> medusa_pb2
+    <span class="hljs-keyword">import</span> medusa_pb2_grpc
+    backupName = sys.argv[<span class="hljs-number">1</span>]
+
+    <span class="hljs-keyword">import</span> grpc
+    <span class="hljs-keyword">import</span> logging
+    <span class="hljs-keyword">from</span> grpc_health.v1 <span class="hljs-keyword">import</span> health_pb2
+    <span class="hljs-keyword">from</span> grpc_health.v1 <span class="hljs-keyword">import</span> health_pb2_grpc
+
+    <span class="hljs-keyword">from</span> medusa.service.grpc <span class="hljs-keyword">import</span> medusa_pb2
+    <span class="hljs-keyword">from</span> medusa.service.grpc <span class="hljs-keyword">import</span> medusa_pb2_grpc
+
+
+    <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">Client</span>:</span>
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">__init__</span><span class="hljs-params">(self, target, channel_options=[])</span>:</span>
+            self.channel = grpc.insecure_channel(target, options=channel_options)
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">health_check</span><span class="hljs-params">(self)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                health_stub = health_pb2_grpc.HealthStub(self.channel)
+                request = health_pb2.HealthCheckRequest()
+                <span class="hljs-keyword">return</span> health_stub.Check(request)
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed health check due to error: {}"</span>.format(e))
+                <span class="hljs-keyword">return</span> <span class="hljs-keyword">None</span>
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">create_backup_stub</span><span class="hljs-params">(self, mode)</span>:</span>
+            stub = medusa_pb2_grpc.MedusaStub(self.channel)
+            <span class="hljs-keyword">if</span> mode == <span class="hljs-string">"differential"</span>:
+                backup_mode = <span class="hljs-number">0</span>
+            <span class="hljs-keyword">elif</span> mode == <span class="hljs-string">"full"</span>:
+                backup_mode = <span class="hljs-number">1</span>
+            <span class="hljs-keyword">else</span>:
+                <span class="hljs-keyword">raise</span> RuntimeError(<span class="hljs-string">"{} is not a recognized backup mode"</span>.format(mode))
+            <span class="hljs-keyword">return</span> backup_mode, stub
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">async_backup</span><span class="hljs-params">(self, name, mode)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                backup_mode, stub = self.create_backup_stub(mode=mode)
+                request = medusa_pb2.BackupRequest(name=name, mode=backup_mode)
+                <span class="hljs-keyword">return</span> stub.AsyncBackup(request)
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed async backup for name: {} and mode: {} due to error: {}"</span>.format(name, mode, e))
+                <span class="hljs-keyword">return</span> <span class="hljs-keyword">None</span>
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">backup</span><span class="hljs-params">(self, name, mode)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                backup_mode, stub = self.create_backup_stub(mode=mode)
+                request = medusa_pb2.BackupRequest(name=name, mode=backup_mode)
+                <span class="hljs-keyword">return</span> stub.Backup(request)
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed sync backup for name: {} and mode: {} due to error: {}"</span>.format(name, mode, e))
+                <span class="hljs-keyword">return</span> <span class="hljs-keyword">None</span>
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">delete_backup</span><span class="hljs-params">(self, name)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                stub = medusa_pb2_grpc.MedusaStub(self.channel)
+                request = medusa_pb2.DeleteBackupRequest(name=name)
+                stub.DeleteBackup(request)
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed to delete backup for name: {} due to error: {}"</span>.format(name, e))
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">get_backups</span><span class="hljs-params">(self)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                stub = medusa_pb2_grpc.MedusaStub(self.channel)
+                request = medusa_pb2.GetBackupsRequest()
+                response = stub.GetBackups(request)
+                <span class="hljs-keyword">return</span> response.backups
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed to obtain list of backups due to error: {}"</span>.format(e))
+                <span class="hljs-keyword">return</span> <span class="hljs-keyword">None</span>
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">get_backup_status</span><span class="hljs-params">(self, name)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                stub = medusa_pb2_grpc.MedusaStub(self.channel)
+                request = medusa_pb2.BackupStatusRequest(backupName=name)
+                resp = stub.BackupStatus(request)
+                <span class="hljs-keyword">return</span> resp.status
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed to determine backup status for name: {} due to error: {}"</span>.format(name, e))
+                <span class="hljs-keyword">return</span> medusa_pb2.StatusType.UNKNOWN
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">backup_exists</span><span class="hljs-params">(self, name)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                backups = self.get_backups()
+                <span class="hljs-keyword">for</span> backup <span class="hljs-keyword">in</span> list(backups):
+                    <span class="hljs-keyword">if</span> backup.backupName == name:
+                        <span class="hljs-keyword">return</span> <span class="hljs-keyword">True</span>
+                <span class="hljs-keyword">return</span> <span class="hljs-keyword">False</span>
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed to determine if backup exists for backup name: {} due to error: {}"</span>.format(name, e))
+                <span class="hljs-keyword">return</span> <span class="hljs-keyword">False</span>
+
+        <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">purge_backups</span><span class="hljs-params">(self)</span>:</span>
+            <span class="hljs-keyword">try</span>:
+                stub = medusa_pb2_grpc.MedusaStub(self.channel)
+                request = medusa_pb2.PurgeBackupsRequest()
+                resp = stub.PurgeBackups(request)
+                <span class="hljs-keyword">return</span> resp
+            <span class="hljs-keyword">except</span> grpc.RpcError <span class="hljs-keyword">as</span> e:
+                logging.error(<span class="hljs-string">"Failed to purge backups due to error: {}"</span>.format(e))
+                <span class="hljs-keyword">return</span> <span class="hljs-keyword">None</span>
+
+    <span class="hljs-keyword">if</span> __name__ == <span class="hljs-string">'__main__'</span>:
+        logging.basicConfig()
+        client_stub = Client(<span class="hljs-string">'localhost:50051'</span>)
+        print(<span class="hljs-string">"-------------- health_check --------------"</span>)
+        client_stub.health_check()
+        print(<span class="hljs-string">"-------------- get_backups --------------"</span>)
+        client_stub.get_backups()
+        print(<span class="hljs-string">"-------------- backing up : "</span>,backupName)
+        client_stub.backup(backupName,<span class="hljs-string">"full"</span>)
+        print(<span class="hljs-string">"-------------- back up complete : "</span>,backupName)
+
+
+  medusa.ini: |
+    [cassandra]
+    stop_cmd = /opt/cassandra/bin/cassandra stop
+    start_cmd = /opt/cassandra/bin/cassandra start
+    config_file = /etc/cassandra/cassandra.yaml
+    cql_username = cassandra
+    cql_password = cassandra
+    nodetool_username = jmx_user
+    nodetool_password_file_path = /secrets/jmxremote.password
+    ;nodetool_host = cassandra<span class="hljs-number">-0.</span>cassandra.default.svc.cluster.local
+    nodetool_port = <span class="hljs-number">7199</span>
+    nodetool_flags = <span class="hljs-string">"-h ::FFFF:127.0.0.1"</span>
+    sstableloader_bin = /opt/cassandra/bin/sstableloader
+    nodetool_ssl = false
+    check_running = nodetool -u jmx_user -pwf /secrets/jmxremote.password  version
+    resolve_ip_addresses = <span class="hljs-keyword">True</span>
+    use_sudo = <span class="hljs-keyword">False</span>
+
+    [storage]
+    storage_provider = google_storage
+    region = europe-west1
+    bucket_name = cassandrastsbackup
+    key_file = /etc/medusa-secrets/medusa_gcp_key.json
+    prefix = .cassandra
+    max_backup_age = <span class="hljs-number">5</span>
+    max_backup_count = <span class="hljs-number">0</span>
+    transfer_max_bandwidth = <span class="hljs-number">50</span>MB/s
+    concurrent_transfers = <span class="hljs-number">1</span>
+    multi_part_upload_threshold = <span class="hljs-number">104857600</span>
+    backup_grace_period_in_days = <span class="hljs-number">10</span>
+    use_sudo_for_restore = <span class="hljs-keyword">False</span>
+
+    [monitoring]
+    ;monitoring_provider = &lt;Provider used <span class="hljs-keyword">for</span> sending metrics. Currently either of <span class="hljs-string">"ffwd"</span> <span class="hljs-keyword">or</span> <span class="hljs-string">"local"</span>&gt;
+
+    [ssh]
+    username = root
+    key_file = /tmp/hostCerts/ssh_host_ed25519_key
+    cert_file = /tmp/hostCerts/ssh_host_ed25519_key-cert.pub
+
+    [checks]
+    ;expected_rows = &lt;Number of rows expected to be returned when the query runs. Not checked <span class="hljs-keyword">if</span> <span class="hljs-keyword">not</span> specified.&gt;
+
+    [logging]
+    ; Controls file logging, disabled by default.
+    enabled = <span class="hljs-number">1</span>
+    file = medusa.log
+    level = DEBUG
+    ; Control the log output format
+    format = [%(asctime)s] %(levelname)s: %(message)s
+    ; Size over which log file will rotate
+    maxBytes = <span class="hljs-number">20000000</span>
+    ; How many log files to keep
+    backupCount = <span class="hljs-number">50</span>
+
+    [grpc]
+    ; Set to true when running <span class="hljs-keyword">in</span> grpc server mode.
+    ; Allows to propagate the exceptions instead of exiting the program.
+    enabled = <span class="hljs-number">1</span>
+
+    [kubernetes]
+    ; The following settings are only intended to be configured <span class="hljs-keyword">if</span> Medusa <span class="hljs-keyword">is</span> running <span class="hljs-keyword">in</span> containers, preferably <span class="hljs-keyword">in</span> Kubernetes.
+    enabled = <span class="hljs-number">1</span>
+    ;cassandra_url = &lt;URL of the management API snapshot endpoint. For example: http://<span class="hljs-number">127.0</span><span class="hljs-number">.0</span><span class="hljs-number">.1</span>:<span class="hljs-number">8080</span>/api/v0/ops/node/snapshots&gt;
+    cassandra_url = http://<span class="hljs-number">127.0</span><span class="hljs-number">.0</span><span class="hljs-number">.1</span>:<span class="hljs-number">8778</span>/jolokia/
+    ; Enables the use of the management API to create snapshots. Falls back to using Jolokia <span class="hljs-keyword">if</span> <span class="hljs-keyword">not</span> enabled.
+    use_mgmt_api = <span class="hljs-number">0</span>
+</code></pre>
+<hr>
+<h2 id="apply-the-cronjob-yaml-for-backup">Apply the CronJob.yaml for backup</h2>
+<ul>
+    <li>Backup Cron Scheduled for 00.35 hrs 6 days a week.</li>
+    <li>ConfigMap scripts is used.</li>
+</ul>
+<pre><code><span class="hljs-attr">apiVersion:</span> batch/v1
+<span class="hljs-attr">kind:</span> CronJob
+<span class="hljs-attr">metadata:</span> 
+<span class="hljs-attr">  name:</span> medusa-grpc-backup
+<span class="hljs-attr">  namespace:</span> &lt;namespace of the sts file<span class="hljs-string">&gt;
+</span><span class="hljs-attr">spec:</span> 
+<span class="hljs-attr">  schedule:</span> <span class="hljs-string">"35 0 * * 0-6"</span>
+<span class="hljs-attr">  successfulJobsHistoryLimit:</span> <span class="hljs-number">3</span>
+<span class="hljs-attr">  failedJobsHistoryLimit:</span> <span class="hljs-number">3</span>
+<span class="hljs-attr">  jobTemplate:</span> 
+<span class="hljs-attr">    spec:</span> 
+<span class="hljs-attr">      template:</span> 
+<span class="hljs-attr">        metadata:</span> 
+<span class="hljs-attr">          name:</span> medusa-grpc-backup
+<span class="hljs-attr">        spec:</span>
+<span class="hljs-attr">          initContainers:</span>
+<span class="hljs-attr">            - name:</span> medusa-copy
+<span class="hljs-attr">              image:</span> <span class="hljs-string">"alpine:3.15"</span>
+<span class="hljs-attr">              resources:</span>
+<span class="hljs-attr">                requests:</span>
+<span class="hljs-attr">                  cpu:</span> <span class="hljs-number">20</span>m
+<span class="hljs-attr">                  memory:</span> <span class="hljs-number">200</span>Mi
+<span class="hljs-attr">              imagePullPolicy:</span> IfNotPresent
+<span class="hljs-attr">              command:</span> [<span class="hljs-string">"/bin/sh"</span>, <span class="hljs-string">"-c"</span>]
+<span class="hljs-attr">              args:</span>
+<span class="hljs-bullet">                -</span> cp ./data/scripts/* ./scripts;
+                  apk add --update --<span class="hljs-literal">no</span>-cache --quiet curl coreutils; apk --quiet upgrade;
+                  ./scripts/configure_k8s.sh;
+                  sleep <span class="hljs-number">2</span>;
+                  sh ./scripts/ascertain_cassandra_nodes.sh;
+                  sleep <span class="hljs-number">2</span>;
+                  sh ./scripts/copy_yaml.sh;
+                  sleep <span class="hljs-number">2</span>;
+                  echo <span class="hljs-string">"yamls copied from cass containers to medusa containers..."</span>;
+                  sleep <span class="hljs-number">10</span>;
+<span class="hljs-attr">              volumeMounts:</span>
+<span class="hljs-attr">                - name:</span> cache-volume
+<span class="hljs-attr">                  mountPath:</span> <span class="hljs-string">"/scripts"</span>
+<span class="hljs-attr">                - name:</span> data-scripts
+<span class="hljs-attr">                  mountPath:</span> /data/scripts
+<span class="hljs-attr">          containers:</span>
+<span class="hljs-attr">            - name:</span> medusa-grpc-backup
+<span class="hljs-attr">              image:</span> <span class="hljs-string">"python:3.8-slim-buster"</span>
+<span class="hljs-attr">              resources:</span>
+<span class="hljs-attr">                requests:</span>
+<span class="hljs-attr">                  cpu:</span> <span class="hljs-number">20</span>m
+<span class="hljs-attr">                  memory:</span> <span class="hljs-number">200</span>Mi
+<span class="hljs-attr">              imagePullPolicy:</span> IfNotPresent
+<span class="hljs-attr">              command:</span> [<span class="hljs-string">"/bin/sh"</span>, <span class="hljs-string">"-c"</span>]
+<span class="hljs-attr">              args:</span>
+<span class="hljs-bullet">                -</span> apt update -qq &amp;&amp; apt-get install -qq --<span class="hljs-literal">no</span>-install-recommends git curl &gt; /dev/<span class="hljs-literal">null</span>;
+                  rm -rf /var/lib/apt/lists/*;
+                  git clone https://github.com/thelastpickle/cassandra-medusa.git;
+                  cd cassandra-medusa;
+                  pip install -r requirements-grpc.txt &gt; /dev/<span class="hljs-literal">null</span>;
+                  cd medusa/service/grpc;
+                  python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. medusa.proto;
+                  cp /data/scripts/client.py .;
+                  sleep <span class="hljs-number">2</span>;
+                  sh /data/scripts/configure_k8s.sh;
+                  sleep <span class="hljs-number">2</span>;
+                  sh /data/scripts/ascertain_cassandra_nodes.sh;
+                  sleep <span class="hljs-number">2</span>;
+                  sh /data/scripts/backup_with_medusa.sh;
+                  sleep <span class="hljs-number">2</span>;
+<span class="hljs-attr">              volumeMounts:</span>
+<span class="hljs-attr">                - name:</span> data-scripts
+<span class="hljs-attr">                  mountPath:</span> /data/scripts
+<span class="hljs-attr">          volumes:</span>
+<span class="hljs-attr">            - name:</span> data-scripts
+<span class="hljs-attr">              configMap:</span> 
+<span class="hljs-attr">                defaultMode:</span> <span class="hljs-number">0755</span>
+<span class="hljs-attr">                name:</span> scripts
+</code></pre>
+<hr>
+<h2 id="sts-modification-checklist-for-backup">STS Modification Checklist for backup</h2>
+<ul>
+    <li>Check the manifests are in the same namespace as STS and correct the manifests if its not. Donot apply changes until then.</li>
+    <li>Run the Cronjob to ensure the backup in s3. See the logs of the pod. It should be steady.</li>
+    <li>Check backups inside the bucket post running the CronJob.</li>
+    <li>To ensure the k8ssadra migration works well, ensure there is a perfect backup. </li>
+    <li>Ensure atleast 2 or more sts backups using medusa on the s3 bucket. Check the contents of the s3 bucket as well to find the date and time references.</li>
+    <li>Add random data via a client tool to schemas/tables/column data. Fire backups from the CronJob. Repeat this often. For example.</li>
+</ul>
+<pre><code><span class="hljs-keyword">CREATE</span> KEYSPACE medusa_test  <span class="hljs-keyword">WITH</span> <span class="hljs-keyword">replication</span> = {<span class="hljs-string">'class'</span>: <span class="hljs-string">'SimpleStrategy'</span>, <span class="hljs-string">'replication_factor'</span>: <span class="hljs-number">1</span>};
+<span class="hljs-keyword">USE</span> medusa_test;
+<span class="hljs-keyword">CREATE</span> <span class="hljs-keyword">TABLE</span> <span class="hljs-keyword">users</span> (email <span class="hljs-built_in">text</span> primary <span class="hljs-keyword">key</span>, <span class="hljs-keyword">name</span> <span class="hljs-built_in">text</span>, state <span class="hljs-built_in">text</span>);
+<span class="hljs-keyword">insert</span> <span class="hljs-keyword">into</span> <span class="hljs-keyword">users</span> (email, <span class="hljs-keyword">name</span>, state) <span class="hljs-keyword">values</span> (<span class="hljs-string">'alice@example.com'</span>, <span class="hljs-string">'Alice Smith'</span>, <span class="hljs-string">'TX'</span>);
+<span class="hljs-keyword">insert</span> <span class="hljs-keyword">into</span> <span class="hljs-keyword">users</span> (email, <span class="hljs-keyword">name</span>, state) <span class="hljs-keyword">values</span> (<span class="hljs-string">'bob@example.com'</span>, <span class="hljs-string">'Bob Jones'</span>, <span class="hljs-string">'VA'</span>);
+<span class="hljs-keyword">insert</span> <span class="hljs-keyword">into</span> <span class="hljs-keyword">users</span> (email, <span class="hljs-keyword">name</span>, state) <span class="hljs-keyword">values</span> (<span class="hljs-string">'carol@example.com'</span>, <span class="hljs-string">'Carol Jackson'</span>, <span class="hljs-string">'CA'</span>);
+<span class="hljs-keyword">insert</span> <span class="hljs-keyword">into</span> <span class="hljs-keyword">users</span> (email, <span class="hljs-keyword">name</span>, state) <span class="hljs-keyword">values</span> (<span class="hljs-string">'david@example.com'</span>, <span class="hljs-string">'David Yang'</span>, <span class="hljs-string">'NV'</span>);
+</code></pre>
+<ul>
+    <li>The next step is to restore test a backup.</li>
+</ul>
+<hr>
+<h2 id="restore-from-s3-bucket-to-vanilla-sts-backup">Restore from s3 bucket to vanilla STS backup</h2>
+<p><b>Note</b>: Submit all the modifications to the sts yaml in one go.</p>
+<ul>
+    <li>To restore from the backup ensure the backups taken above and you have backups visible in the s3 bucket.</li>
+    <li>The cassandra pods should be labled the following via the sts yaml.<pre><code><span class="hljs-symbol">        labels:</span>          
+<span class="hljs-symbol">          cassandra:</span> restore
+</code></pre></li>
+    <li>After the pods restart, please add the following snippet to the <b>initContainer</b> of the cassandra sts yaml and replace with the correct value for the env variable BACKUP_NAME. e.g. backup-06-03-2022-00-36-16</li>
+    <li>Check the s3 backup bucket for the right reference. And chose which backup reference you like to restore test. </li>
+    <li>For the first time of a restore there is no RESTORE_KEY value so you can set any value to the variable that will be used again. This will be very important key value to fire the restore. </li>
+    <li>The medusa-cass-yaml container block below is used to extract the cassandra.yml as a template from a running statefulset cassandra pod. (its the vanilla statefulset cassandra)</li>
+    <li>Then the template is set with the cassandra pod IP and ported to the medusa-restore container. </li>
+    <li>As and when you save the sts with these changes, the restore is fired from the s3 store against the BACKUP_NAME. The server-config is a shared folder so the /etc/cassandra/cassandra.yaml is passed from medusa-cass-yaml container to medusa-restore
+        container.</li>
+</ul>
+<pre><code><span class="hljs-attr">        - name:</span> medusa-cass-yaml
+<span class="hljs-attr">          image:</span> alpine:<span class="hljs-number">3.15</span>
+<span class="hljs-attr">          imagePullPolicy:</span> IfNotPresent
+<span class="hljs-attr">          command:</span>
+<span class="hljs-bullet">            -</span> /bin/sh
+<span class="hljs-bullet">            -</span> <span class="hljs-string">'-c'</span>
+<span class="hljs-attr">          args:</span>
+<span class="hljs-bullet">            -</span> &gt;-
+              cp ./data/scripts/* ./scripts;apk add --update --<span class="hljs-literal">no</span>-cache --quiet curl coreutils; apk --quiet upgrade;./scripts/configure_k8s.sh;
+              sleep <span class="hljs-number">2</span>; kubectl get pod -l cassandra=restore --field-selector=status.phase=Running -n cassandra | awk -F<span class="hljs-string">" "</span> <span class="hljs-string">'{print $1}'</span> | grep -v NAME | head <span class="hljs-bullet">-1</span> &gt; /tmp/firstPod;
+              sleep <span class="hljs-number">5</span>; kubectl exec pod/<span class="hljs-string">"$(cat /tmp/firstPod | sed 's/\r$//')"</span> -c cassandra -n cassandra -- tar cf - /etc/cassandra/cassandra.yaml | tar xvf - -C /tmp &amp;&amp; cat /tmp/etc/cassandra/cassandra.yaml &gt; /tmp/cassandra.yaml.template;
+              sleep <span class="hljs-number">4</span>; cat /tmp/cassandra.yaml.template | sed <span class="hljs-string">"s/10\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}/$POD_IP/g"</span> &gt; /etc/cassandra/cassandra.yaml;
+              sleep <span class="hljs-number">2</span>; cat /etc/cassandra/cassandra.yaml; sleep <span class="hljs-number">10</span>;
+<span class="hljs-attr">          env:</span>
+<span class="hljs-attr">            - name:</span> POD_IP
+<span class="hljs-attr">              valueFrom:</span>
+<span class="hljs-attr">                fieldRef:</span>
+<span class="hljs-attr">                  apiVersion:</span> v1
+<span class="hljs-attr">                  fieldPath:</span> status.podIP
+<span class="hljs-attr">          resources:</span>
+<span class="hljs-attr">            requests:</span>
+<span class="hljs-attr">              cpu:</span> <span class="hljs-number">20</span>m
+<span class="hljs-attr">              memory:</span> <span class="hljs-number">200</span>Mi
+<span class="hljs-attr">          volumeMounts:</span>
+<span class="hljs-attr">            - name:</span> cache-volume
+<span class="hljs-attr">              mountPath:</span> /scripts
+<span class="hljs-attr">            - name:</span> data-scripts
+<span class="hljs-attr">              mountPath:</span> /data/scripts
+<span class="hljs-attr">            - name:</span> server-config
+<span class="hljs-attr">              mountPath:</span> /etc/cassandra
+
+<span class="hljs-attr">        - name:</span> medusa-restore
+<span class="hljs-attr">          image:</span> docker.io/k8ssandra/medusa:<span class="hljs-number">0.11</span><span class="hljs-number">.3</span>
+<span class="hljs-attr">          imagePullPolicy:</span> IfNotPresent
+<span class="hljs-attr">          env:</span>
+<span class="hljs-attr">            - name:</span> MEDUSA_MODE
+<span class="hljs-attr">              value:</span> RESTORE
+            <span class="hljs-comment"># Update this value and put some arbitrary string if you want to restore. </span>
+            <span class="hljs-comment"># The container saves this value and compares next restore so change it every time</span>
+<span class="hljs-attr">            - name:</span> RESTORE_KEY
+<span class="hljs-attr">              value:</span> anyrandomkeyFirstTimeOnly
+            <span class="hljs-comment"># Update the value with the candidate you want to restore from s3 bucket. </span>
+            <span class="hljs-comment"># Ensure the bucket has this folder in all the cass node folders.  </span>
+<span class="hljs-attr">            - name:</span> BACKUP_NAME
+<span class="hljs-attr">              value:</span> backup<span class="hljs-bullet">-06</span><span class="hljs-bullet">-03</span><span class="hljs-bullet">-2022</span><span class="hljs-bullet">-00</span><span class="hljs-bullet">-36</span><span class="hljs-bullet">-16</span>
+<span class="hljs-attr">          resources:</span> {}
+<span class="hljs-attr">          volumeMounts:</span>
+<span class="hljs-attr">            - name:</span> cassandra-medusa
+<span class="hljs-attr">              mountPath:</span> /etc/medusa
+<span class="hljs-attr">            - name:</span> server-config
+<span class="hljs-attr">              mountPath:</span> /etc/cassandra
+<span class="hljs-attr">            - name:</span> cassandra-data
+<span class="hljs-attr">              mountPath:</span> /var/lib/cassandra
+<span class="hljs-attr">            - name:</span> podinfo
+<span class="hljs-attr">              mountPath:</span> /etc/podinfo
+<span class="hljs-attr">            - name:</span> google-storage-s3-json
+<span class="hljs-attr">              mountPath:</span> /etc/medusa-secrets
+<span class="hljs-attr">            - name:</span> kube-api-access-d9chp
+<span class="hljs-attr">              readOnly:</span> <span class="hljs-literal">true</span>
+<span class="hljs-attr">              mountPath:</span> /var/run/secrets/kubernetes.io/serviceaccount
+</code></pre>
+<hr>
+<h2 id="restore-checklist">Restore Checklist</h2>
+<ul>
+    <li>The moment the cassandra sts yaml is saved a restore is fired. You would be witnessing a rolling update of pods.</li>
+    <li>Check if all the logs of the medusa-restore initContainer looks good. If all is good, use the Cassandra client tool to check the schema/table values. </li>
+    <li>If all is good, next step is to proceed with the k8ssandra migration as mentioned in the link <a href="https://k8ssandra.io/blog/tutorials/how-to/how-to-migrate-an-existing-cluster-to-k8ssandra-operator-without-any-downtime/">https://k8ssandra.io/blog/tutorials/how-to/how-to-migrate-an-existing-cluster-to-k8ssandra-operator-without-any-downtime/</a>.
+        Ensure to check the cluster names of the source and the destination. </li>
+    <li>donot empty any files and folders from the s3 bucket.</li>
+</ul>
+<hr>
+<h2 id="migration-to-k8ssandra-from-sts">Migration to k8ssandra from sts</h2>
+<p>This procedure is done post the backup and restore test on plain STS cassandra.</p>
+<h2 id="steps">Steps</h2>
+<ul>
+    <li>In the cassandra sts cluster : run <code>nodetool status</code> check cassandra status.<pre><code>$ nodetool status
+Datacenter: DC1-K8Demo
+=====================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address        Load      Tokens  Owns (effective)  Host ID                               Rack
+UN  172.31.4.217   10.2 GiB  16      100.0%            9a9b5e8f-c0c2<span class="hljs-string">-404</span>d<span class="hljs-string">-95</span>e1<span class="hljs-string">-372880</span>e02c43  us-west<span class="hljs-string">-2</span>c
+UN  172.31.38.15   10.2 GiB  16      100.0%            1e6a9077-bb47<span class="hljs-string">-4584</span><span class="hljs-string">-83</span>d5<span class="hljs-string">-8</span>bed63512fd8  us-west<span class="hljs-string">-2</span>b
+UN  172.31.22.153  10.2 GiB  16      100.0%            d6488a81-be1c<span class="hljs-string">-4</span>b07<span class="hljs-string">-9145</span><span class="hljs-string">-2</span>aa32675282a  us-west<span class="hljs-string">-2</span>a
+</code></pre></li>
+    <li>In Cassandra sts cluster go to the casandra client tool SQL IDE or the cqlsh cli of cassandra container. </li>
+    <li>Alter these keyspaces to use NetworkTopologyStrategy <code>system_auth,system_distributed,system_traces and other non-system/user keyspaces</code>. </li>
+    <li>Ensure the DC name as used from he <code>nodetool status</code> output.<pre><code>cqlsh&gt; ALTER KEYSPACE &lt;keyspace_name&gt; <span class="hljs-keyword">WITH</span> replication = {<span class="hljs-symbol">'class</span>': <span class="hljs-symbol">'NetworkTopologyStrategy</span>', <span class="hljs-symbol">'DC1</span>-K8Demo': <span class="hljs-number">3</span>};
+</code></pre></li>
+    <li>We need to make a new k8ssandra cluster for the cass-operator with the below manifest <code>values.yaml</code> in the same namespace.</li>
+    <li>It is optional to keep the same cassandra cluster name as source cluster as the cassandra clients using the new cluster will check for some cluster variables used on the cassandra client-end for eg. CASSANDRA_CLUSTER_NAME or similar. ( please check
+        client app variables that connect cassandra cluster). We have used the same cluster name as source cluster here so that our cassandra client apps donot complain. We have used a different DC name k8s-1 to identify the k8ssandra DC.</li>
+    <li>Update the IP of cassandra-0<pre><code><span class="hljs-comment"># values.yaml</span>
+<span class="hljs-attr">cassandra:</span>
+<span class="hljs-comment"># version: "4.0.0"</span>
+version <span class="hljs-string">"3.11.12"</span>
+<span class="hljs-attr">clusterName:</span> <span class="hljs-string">"cluster"</span>
+<span class="hljs-attr">allowMultipleNodesPerWorker:</span> <span class="hljs-literal">false</span>
+<span class="hljs-attr">additionalSeeds:</span>
+<span class="hljs-comment"># it is the cassandra-0 node IP from the cassandra STS cluster (source cluster). Please update this value. Possibly with internal or external IP.</span>
+<span class="hljs-bullet">-</span> <span class="hljs-number">172.31</span><span class="hljs-number">.4</span><span class="hljs-number">.217</span>
+<span class="hljs-comment"># you can also provide domain name cassandra-0.cassandra.default.svc.cluster.local. It should be a service with a valid port</span>
+<span class="hljs-attr">heap:</span>
+<span class="hljs-attr"> size:</span> <span class="hljs-number">31</span>g
+<span class="hljs-attr">gc:</span>
+<span class="hljs-attr">  g1:</span>
+<span class="hljs-attr">    enabled:</span> <span class="hljs-literal">true</span>
+<span class="hljs-attr">    setUpdatingPauseTimePercent:</span> <span class="hljs-number">5</span>
+<span class="hljs-attr">    maxGcPauseMillis:</span> <span class="hljs-number">300</span>
+<span class="hljs-attr">resources:</span>
+<span class="hljs-attr">  requests:</span>
+<span class="hljs-attr">    memory:</span> <span class="hljs-string">"59Gi"</span>
+<span class="hljs-attr">    cpu:</span> <span class="hljs-string">"7000m"</span>
+<span class="hljs-attr">  limits:</span>
+<span class="hljs-attr">    memory:</span> <span class="hljs-string">"60Gi"</span>
+<span class="hljs-attr">datacenters:</span>
+<span class="hljs-attr">- name:</span> k8s<span class="hljs-bullet">-1</span>
+<span class="hljs-attr">  size:</span> <span class="hljs-number">3</span>
+<span class="hljs-attr">  racks:</span>
+<span class="hljs-attr">  - name:</span> r1
+<span class="hljs-attr">    affinityLabels:</span>
+      topology.kubernetes.io/zone: europe-west<span class="hljs-bullet">-1</span>a
+<span class="hljs-attr">  - name:</span> r2
+<span class="hljs-attr">    affinityLabels:</span>
+      topology.kubernetes.io/zone: europe-west<span class="hljs-bullet">-1</span>b
+<span class="hljs-attr">  - name:</span> r3
+<span class="hljs-attr">    affinityLabels:</span>
+      topology.kubernetes.io/zone: europe-west<span class="hljs-bullet">-1</span>c
+<span class="hljs-attr">ingress:</span>
+<span class="hljs-attr">  enabled:</span> <span class="hljs-literal">false</span>
+<span class="hljs-attr">cassandraLibDirVolume:</span>
+<span class="hljs-attr">  storageClass:</span> standard-rwo
+<span class="hljs-attr">  size:</span> <span class="hljs-number">100</span>Gi
+<span class="hljs-attr">stargate:</span>
+<span class="hljs-attr">enabled:</span> <span class="hljs-literal">false</span>
+<span class="hljs-comment"># add medusa config later when migration is a success.</span>
+<span class="hljs-attr">medusa:</span>
+<span class="hljs-attr">enabled:</span> <span class="hljs-literal">false</span>
+<span class="hljs-attr">reaper-operator:</span>
+<span class="hljs-attr">enabled:</span> <span class="hljs-literal">false</span>
+<span class="hljs-attr">kube-prometheus-stack:</span>
+<span class="hljs-attr">enabled:</span> <span class="hljs-literal">false</span>
+<span class="hljs-attr">reaper:</span>
+<span class="hljs-attr">enabled:</span> <span class="hljs-literal">false</span>
+</code></pre></li>
+</ul>
+<hr>
+<h2 id="make-the-new-k8ssandra-cluster">Make the new k8ssandra cluster</h2>
+<pre><code>helm install k8ssandra charts/k8ssandra -n &lt;namespace <span class="hljs-keyword">of</span> <span class="hljs-keyword">the</span> sts <span class="hljs-built_in">file</span>&gt; -f values.yaml
+</code></pre>
+<ul>
+    <li>do a <code>nodetool status</code> after 10 mins in the source cluster cassandra node. Watch the owns(its 0%)<pre><code><span class="hljs-section">Datacenter: k8s-1
+=================</span>
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+<span class="hljs-bullet">--  </span>Address        Load       Tokens  Owns (effective)  Host ID                               Rack
+UN  10.0.3.10      78.16 KiB  16      0.0%              c63b9b16-24fe-4232-b146-b7c2f450fcc6  europe-west-1a
+UN  10.0.2.66      69.14 KiB  16      0.0%              b1409a2e-cba1-482f-9ea6-c895bf296cd9  europe-west-1b
+UN  10.0.1.77      69.13 KiB  16      0.0%              78c53702-7a47-4629-a7bd-db41b1705bb8  europe-west-1c
+<span class="hljs-section">Datacenter: DC1-K8Demo
+=====================</span>
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+<span class="hljs-bullet">--  </span>Address        Load       Tokens  Owns (effective)  Host ID                               Rack
+UN  172.31.4.217   10.2 GiB   16      100.0%            9a9b5e8f-c0c2-404d-95e1-372880e02c43  europe-west-1a
+UN  172.31.38.15   10.2 GiB   16      100.0%            1e6a9077-bb47-4584-83d5-8bed63512fd8  europe-west-1b
+UN  172.31.22.153  10.2 GiB   16      100.0%            d6488a81-be1c-4b07-9145-2aa32675282a  europe-west-1c
+</code></pre></li>
+    <li>Alter the keyspaces in the new k8ssandra cluster.</li>
+    <li>system_auth,system_distributed,system_traces and other non-system/user keyspaces. <pre><code>cqlsh&gt; ALTER KEYSPACE &lt;keyspace_name&gt; <span class="hljs-keyword">WITH</span> replication = {<span class="hljs-symbol">'class</span>': <span class="hljs-symbol">'NetworkTopologyStrategy</span>', <span class="hljs-symbol">'DC1</span>-K8Demo': <span class="hljs-string">'3'</span>, <span class="hljs-symbol">'k8s</span>-<span class="hljs-number">1</span>': <span class="hljs-string">'3'</span>};
+</code></pre>Run rebuild old DC on new cluster<pre><code> # kubectl <span class="hljs-keyword">exec</span> -it pod/k8s<span class="hljs-number">-1</span>-r1-sts<span class="hljs-number">-0</span> -c &lt;<span class="hljs-keyword">namespace</span> of the sts <span class="hljs-keyword">file</span>&gt; -n k8ssandra -- nodetool rebuild DC1-K8Demo
+ # kubectl <span class="hljs-keyword">exec</span> -it pod/k8s<span class="hljs-number">-1</span>-r1-sts<span class="hljs-number">-1</span> -c &lt;<span class="hljs-keyword">namespace</span> of the sts <span class="hljs-keyword">file</span>&gt; -n k8ssandra -- nodetool rebuild DC1-K8Demo
+ # kubectl <span class="hljs-keyword">exec</span> -it pod/k8s<span class="hljs-number">-1</span>-r1-sts<span class="hljs-number">-2</span> -c &lt;<span class="hljs-keyword">namespace</span> of the sts <span class="hljs-keyword">file</span>&gt; -n k8ssandra -- nodetool rebuild DC1-K8Demo
+</code></pre></li>
+    <li>final output. Watch the owns ( 100%)<pre><code><span class="hljs-section">Datacenter: k8s-1
+=================</span>
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+<span class="hljs-bullet">--  </span>Address        Load       Tokens  Owns (effective)  Host ID                               Rack
+UN  10.0.3.10      78.16 KiB  16      100.0%              c63b9b16-24fe-4232-b146-b7c2f450fcc6  europe-west-1a
+UN  10.0.2.66      69.14 KiB  16      100.0%              b1409a2e-cba1-482f-9ea6-c895bf296cd9  europe-west-1b
+UN  10.0.1.77      69.13 KiB  16      100.0%              78c53702-7a47-4629-a7bd-db41b1705bb8  europe-west-1c
+<span class="hljs-section">Datacenter: DC1-K8Demo
+=====================</span>
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+<span class="hljs-bullet">--  </span>Address        Load       Tokens  Owns (effective)  Host ID                               Rack
+UN  172.31.4.217   10.32 GiB  16      100.0%            9a9b5e8f-c0c2-404d-95e1-372880e02c43  europe-west-1a
+UN  172.31.38.15   10.32 GiB  16      100.0%            1e6a9077-bb47-4584-83d5-8bed63512fd8  europe-west-1b
+UN  172.31.22.153  10.32 GiB  16      100.0%            d6488a81-be1c-4b07-9145-2aa32675282a  europe-west-1c
+</code></pre></li>
+    <li>check the data is present in the new cluster.</li>
+    <li>decommission the old cluster. These are commands if the cluster is in the default namespace<pre><code> # kubectl exec -it pod/cassandra<span class="hljs-number">-0</span> -c &lt;namespace <span class="hljs-keyword">of</span> the sts file&gt; -n <span class="hljs-keyword">default</span> <span class="hljs-comment">-- nodetool decommission</span>
+ # kubectl exec -it pod/cassandra<span class="hljs-number">-1</span> -c &lt;namespace <span class="hljs-keyword">of</span> the sts file&gt; -n <span class="hljs-keyword">default</span> <span class="hljs-comment">-- nodetool decommission</span>
+ # kubectl exec -it pod/cassandra<span class="hljs-number">-2</span> -c &lt;namespace <span class="hljs-keyword">of</span> the sts file&gt; -n <span class="hljs-keyword">default</span> <span class="hljs-comment">-- nodetool decommission</span>
+</code></pre></li>
+</ul>
+<hr>
+<h2 id="check-the-schema-tables-data-on-the-new-k8ssandra-cluster">Check the schema/tables data on the new k8ssandra cluster</h2>
+<ul>
+    <li>Use the cassandra client tool and connect to the new k8ssandra cluster using the service file.</li>
+    <li>Ensure the data is all migrated else wait for all migration to complete. Could be 30 mins to 1 hr or depends on the size of the db to migrate. </li>
+    <li>You can do a <code>du -sh /var/lib/cassandra</code> on the source and destination cluster cassandra containers often to check the folder size. If it is same for some time the migration is complete. </li>
+</ul>
+<hr>
+<h2 id="next-steps">Next steps</h2>
+<ul>
+    <li>Change the clients to point to a new pod selector. Change selector <code>app: cassandra</code> to <code>cassandra.datastax.com/datacenter: k8s-1</code> in the same namespace where the sts was working. <pre><code><span class="hljs-attr">apiVersion:</span> v1
+<span class="hljs-attr">kind:</span> Service
+<span class="hljs-attr">metadata:</span>
+<span class="hljs-attr">labels:</span>
+<span class="hljs-attr">  app:</span> cassandra
+<span class="hljs-attr">name:</span> cassandra
+<span class="hljs-attr">namespace:</span> &lt;namespace of the sts file<span class="hljs-string">&gt;
+</span><span class="hljs-attr">spec:</span>
+<span class="hljs-attr">ports:</span>
+<span class="hljs-attr">- port:</span> <span class="hljs-number">9042</span>
+<span class="hljs-attr">selector:</span>
+  cassandra.datastax.com/datacenter: k8s<span class="hljs-bullet">-1</span>
+</code></pre></li>
+    <li>Check with the clients if all is good with the cassandra access.</li>
+    <li>Scale the old STS cluster to 0 nodes. Donot delete it. Keep for future references.<pre><code>kubectl scale statefulsets &lt;sts-cassandra-<span class="hljs-built_in">name</span>&gt; -n &lt;namespace <span class="hljs-keyword">of</span> <span class="hljs-keyword">the</span> sts <span class="hljs-built_in">file</span>&gt; <span class="hljs-comment">--replicas=0</span>
+</code></pre></li>
+    <li>Preferably dont delete the PV till about a week ore more when all is good with the new k8ssandra cluster working.</li>
+</ul>
+<hr>
+<h2 id="mesuda-for-k8ssandra">Mesuda for k8ssandra</h2>
+<ul>
+    <li>Make new gcs bucket using <a href="https://github.com/thelastpickle/cassandra-medusa/tree/master/docs">https://github.com/thelastpickle/cassandra-medusa/tree/master/docs</a> in the same google project and operationalise the medusa on the k8ssandra
+        using the following documentation. <a href="https://docs-v2.k8ssandra.io/components/medusa/">https://docs-v2.k8ssandra.io/components/medusa/</a> and <a href="https://docs-v2.k8ssandra.io/tasks/backup-restore/gcs/">https://docs-v2.k8ssandra.io/tasks/backup-restore/gcs/</a>.
+        You should see some changes on the Helm Release file with a new medusa block.<pre><code><span class="hljs-attr">  medusa:</span>
+<span class="hljs-attr">    bucketName:</span> cassandra-medusabackups
+<span class="hljs-attr">    enabled:</span> <span class="hljs-literal">true</span>
+<span class="hljs-attr">    multiTenant:</span> <span class="hljs-literal">true</span>
+<span class="hljs-attr">    storage:</span> google_storage
+<span class="hljs-attr">    storageSecret:</span> google-storage-s3-json
+</code></pre></li>
+    <li>Create and apply secret using the credentials.json renames as medusa_gcp_key.json<pre><code>kubectl <span class="hljs-keyword">create</span> secret generic google-<span class="hljs-keyword">storage</span>-s3-<span class="hljs-keyword">json</span> -n &lt;namespace <span class="hljs-keyword">of</span> the sts <span class="hljs-keyword">file</span>&gt; <span class="hljs-comment">--from-file=medusa_gcp_key.json=/tmp/medusa_gcp_key.json</span>
+</code></pre></li>
+    <li>For example you can use the file cassandra_backup.yaml as defined in the abobe mentioned configMap <code>scripts</code>.<pre><code>cassandra_backup.yaml: |
+<span class="hljs-symbol">  apiVersion:</span> cassandra.k8ssandra.io/v1alpha1
+<span class="hljs-symbol">  kind:</span> CassandraBackup
+<span class="hljs-symbol">  metadata:</span>
+<span class="hljs-symbol">    name:</span> medusa-daily-timestamp
+<span class="hljs-symbol">    namespace:</span> <span class="hljs-params">&lt;namespace of the sts file&gt;</span>
+<span class="hljs-symbol">  spec:</span>
+<span class="hljs-symbol">    backupType:</span> <span class="hljs-string">"differential"</span>
+<span class="hljs-symbol">    name:</span> medusa-daily-timestamp
+<span class="hljs-symbol">    cassandraDatacenter:</span> k8s<span class="hljs-number">-1</span>
+</code></pre></li>
+    <li>Apply the CronJob.<pre><code><span class="hljs-attr">apiVersion:</span> batch/v1beta1
+<span class="hljs-attr">kind:</span> CronJob
+<span class="hljs-attr">metadata:</span>
+<span class="hljs-attr">name:</span> k8ssandra-medusa-backup
+<span class="hljs-attr">namespace:</span> &lt;namespace of the sts file<span class="hljs-string">&gt;
+</span><span class="hljs-attr">spec:</span>
+<span class="hljs-attr">schedule:</span> <span class="hljs-number">35</span> <span class="hljs-number">0</span> * * <span class="hljs-number">0</span><span class="hljs-bullet">-6</span>
+<span class="hljs-attr">concurrencyPolicy:</span> Allow
+<span class="hljs-attr">suspend:</span> <span class="hljs-literal">false</span>
+<span class="hljs-attr">jobTemplate:</span>
+<span class="hljs-attr">  metadata:</span>
+<span class="hljs-attr">    creationTimestamp:</span> <span class="hljs-literal">null</span>
+<span class="hljs-attr">  spec:</span>
+<span class="hljs-attr">    template:</span>
+<span class="hljs-attr">      metadata:</span>
+<span class="hljs-attr">        name:</span> k8ssandra-medusa-backup
+<span class="hljs-attr">      spec:</span>
+<span class="hljs-attr">        volumes:</span>
+<span class="hljs-attr">          - name:</span> cache-volume
+<span class="hljs-attr">            emptyDir:</span> {}
+<span class="hljs-attr">          - name:</span> data-scripts
+<span class="hljs-attr">            configMap:</span>
+<span class="hljs-attr">              name:</span> scripts
+<span class="hljs-attr">              defaultMode:</span> <span class="hljs-number">493</span>
+<span class="hljs-attr">        containers:</span>
+<span class="hljs-attr">          - name:</span> medusa-backup-cronjob
+<span class="hljs-attr">            image:</span> alpine:<span class="hljs-number">3.15</span>
+<span class="hljs-attr">            command:</span>
+<span class="hljs-bullet">              -</span> /bin/sh
+<span class="hljs-bullet">              -</span> <span class="hljs-string">'-c'</span>
+<span class="hljs-attr">            args:</span>
+<span class="hljs-bullet">              -</span> &gt;-
+                cp ./data/scripts/* ./scripts; apk add --update --<span class="hljs-literal">no</span>-cache
+<span class="hljs-bullet">                -</span>-quiet curl coreutils; apk --quiet upgrade;
+                ./scripts/configure_k8s.sh;export backupTimestamp=<span class="hljs-string">"$(date
+                +%Y%m%d%H%M%S)"</span>; echo <span class="hljs-string">"Taking diffential Cassandra
+                backup.."</span>;cat ./scripts/cassandra_backup.yaml | sed
+                s/timestamp/<span class="hljs-string">"$backupTimestamp"</span>/g | kubectl apply -f -; echo
+                <span class="hljs-string">"Lets take a look at the backup resources.."</span>;kubectl get
+                cronjob;kubectl get cassandrabackups -n cassandra;
+<span class="hljs-attr">            resources:</span>
+<span class="hljs-attr">              requests:</span>
+<span class="hljs-attr">                cpu:</span> <span class="hljs-number">20</span>m
+<span class="hljs-attr">                memory:</span> <span class="hljs-number">200</span>Mi
+<span class="hljs-attr">            volumeMounts:</span>
+<span class="hljs-attr">              - name:</span> data-scripts
+<span class="hljs-attr">                mountPath:</span> /data/scripts
+<span class="hljs-attr">              - name:</span> cache-volume
+<span class="hljs-attr">                mountPath:</span> /scripts
+<span class="hljs-attr">            terminationMessagePath:</span> /dev/termination-log
+<span class="hljs-attr">            terminationMessagePolicy:</span> File
+<span class="hljs-attr">            imagePullPolicy:</span> IfNotPresent
+<span class="hljs-attr">        restartPolicy:</span> OnFailure
+<span class="hljs-attr">        terminationGracePeriodSeconds:</span> <span class="hljs-number">30</span>
+<span class="hljs-attr">        serviceAccountName:</span> medusa-backup
+<span class="hljs-attr">        serviceAccount:</span> medusa-backup
+<span class="hljs-attr">        securityContext:</span> {}
+<span class="hljs-attr">successfulJobsHistoryLimit:</span> <span class="hljs-number">0</span>
+<span class="hljs-attr">failedJobsHistoryLimit:</span> <span class="hljs-number">0</span>
+</code></pre></li>
+</ul>
+<hr>
+<h2 id="next-steps">Next steps</h2>
+<ul>
+    <li>Ensure the namespace in all the scripts above is same as the namespace of the sts file</li>
+    <li>Run the cronJob and take the backups on the new s3 bucket.</li>
+    <li>Ensure the backup are happening on the k8ssandra steadily. </li>
+    <li>If you want to restore apply the manifest pointing to the backup name. Refer: <a href="https://docs-v2.k8ssandra.io/tasks/backup-restore/#restoring-a-backup">https://docs-v2.k8ssandra.io/tasks/backup-restore/#restoring-a-backup</a></li>
+</ul>
